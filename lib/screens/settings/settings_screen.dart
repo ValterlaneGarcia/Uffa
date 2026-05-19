@@ -1,12 +1,10 @@
 import 'package:flutter/material.dart';
+import '../../services/notification_service.dart';
 import '../../data/db/app_db.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
 import '../../widgets/common.dart';
 import 'package:uuid/uuid.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/timezone.dart' as tz;
-import 'package:timezone/data/latest.dart' as tz_data;
 
 // ── Phase 2 additions ──────────────────────────────────────────
 import 'dart:io';
@@ -16,96 +14,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
-
-/// Thin wrapper around flutter_local_notifications (v17+).
-/// Call [NotificationService.init] once from main(), then use the other
-/// methods throughout the app.
-///
-/// Required in pubspec.yaml:
-///   flutter_local_notifications: ^17.0.0
-///   timezone: ^0.9.0
-class NotificationService {
-  static final _plugin = FlutterLocalNotificationsPlugin();
-  static bool _initialized = false;
-
-  static Future<void> init() async {
-    if (_initialized) return;
-    tz_data.initializeTimeZones();
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const darwinSettings = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-    );
-    const settings = InitializationSettings(
-      android: androidSettings,
-      iOS: darwinSettings,
-      macOS: darwinSettings,
-    );
-    await _plugin.initialize(settings);
-    _initialized = true;
-  }
-
-  static const _androidDetails = AndroidNotificationDetails(
-    'vencimentos',
-    'Vencimentos',
-    channelDescription: 'Avisos de vencimento de contas e faturas',
-    importance: Importance.high,
-    priority: Priority.high,
-  );
-  static const _notifDetails = NotificationDetails(
-    android: _androidDetails,
-    iOS: DarwinNotificationDetails(),
-  );
-
-  /// Cancels all previously scheduled notifications and re-schedules them
-  /// based on the current config (dias_aviso_antecipado) and upcoming bills.
-  static Future<void> reagendarNotificacoes({
-    required bool ativas,
-    required int diasAviso,
-    required List<Map<String, dynamic>> contas,
-  }) async {
-    await _plugin.cancelAll();
-    if (!ativas) return;
-
-    int notifId = 1;
-    final now = DateTime.now();
-    final localTz = tz.local;
-
-    for (final conta in contas) {
-      final diaVencimento = conta['dia_vencimento'] as int?;
-      if (diaVencimento == null || diaVencimento <= 0) continue;
-
-      final nomeContaStr = conta['nome'] as String? ?? 'Conta';
-
-      // Schedule for the current and next month
-      for (int delta = 0; delta <= 1; delta++) {
-        final mesRaw = now.month + delta;
-        final ano = now.year + (mesRaw > 12 ? 1 : 0);
-        final mes = mesRaw > 12 ? mesRaw - 12 : mesRaw;
-
-        final lastDay = DateTime(ano, mes + 1, 0).day;
-        final diaReal = diaVencimento.clamp(1, lastDay);
-        final dataAviso = DateTime(ano, mes, diaReal).subtract(Duration(days: diasAviso));
-
-        if (dataAviso.isAfter(now)) {
-          final tzDataAviso = tz.TZDateTime.from(dataAviso, localTz);
-          final mesStr = mes < 10 ? '0$mes' : '$mes';
-          await _plugin.zonedSchedule(
-            notifId++,
-            'Vencimento se aproximando',
-            '$nomeContaStr vence em $diasAviso dia(s) — $diaReal/$mesStr/$ano',
-            tzDataAviso,
-            _notifDetails,
-            androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
-          );
-        }
-      }
-    }
-  }
-}
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -118,36 +26,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _nome = 'Usuário';
   bool _notificacoes = true;
   int _diasAviso = 3;
+  int _orcamentoAlertaPercentual = 80;
   bool _loading = true;
-  List<Map<String, dynamic>> _contas = [];
   bool _biometricoAtivo = false;
 
   @override
   void initState() {
     super.initState();
-    NotificationService.init();
     _load();
   }
 
   Future<void> _load() async {
     final config = await AppDB.getConfig();
-    final contas = await AppDB.getContas();
     setState(() {
       _nome = config['nome_usuario'] ?? 'Usuário';
       _notificacoes = config['notificacoes_ativas'] != 'false';
       _diasAviso = int.tryParse(config['dias_aviso_antecipado'] ?? '3') ?? 3;
-      _contas = contas.map((c) => c.toMap()).toList();
+      _orcamentoAlertaPercentual = int.tryParse(
+            config[NotificationService.budgetAlertPercentConfigKey] ?? '80',
+          ) ??
+          80;
       _biometricoAtivo = config['biometrico_ativo'] == 'true';
       _loading = false;
     });
   }
 
   Future<void> _reagendarNotificacoes() async {
-    await NotificationService.reagendarNotificacoes(
-      ativas: _notificacoes,
-      diasAviso: _diasAviso,
-      contas: _contas,
-    );
+    await NotificationService.syncFromDatabase();
   }
 
   @override
@@ -156,8 +61,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       backgroundColor: context.appBackground,
       appBar: AppBar(
         backgroundColor: context.appSurface,
-        title: Text('Configurações',
-            style: TextStyle(color: context.textPrimary)),
+        title:
+            Text('Configurações', style: TextStyle(color: context.textPrimary)),
       ),
       body: _loading
           ? const LoadingState()
@@ -274,7 +179,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
             max: 7,
             onChanged: (v) async {
               setState(() => _diasAviso = v.round());
-              await AppDB.setConfig('dias_aviso_antecipado', v.round().toString());
+              await AppDB.setConfig(
+                  'dias_aviso_antecipado', v.round().toString());
+              await _reagendarNotificacoes();
+            },
+          ),
+          const Divider(height: 1),
+          _SliderTile(
+            icon: Icons.pie_chart_outline_rounded,
+            iconColor: AppColors.red,
+            label: 'Alerta de orçamento',
+            subtitle:
+                'Avisar ao atingir $_orcamentoAlertaPercentual% do limite mensal',
+            value: _orcamentoAlertaPercentual.toDouble(),
+            min: 50,
+            max: 100,
+            onChanged: (v) async {
+              setState(() => _orcamentoAlertaPercentual = v.round());
+              await AppDB.setConfig(
+                NotificationService.budgetAlertPercentConfigKey,
+                v.round().toString(),
+              );
               await _reagendarNotificacoes();
             },
           ),
@@ -374,7 +299,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.info_outline,
           iconColor: context.textSecondary,
           label: 'Versão do app',
-          subtitle: 'v2.0.0 — Flutter / SQLite',
+          subtitle: 'v2.1.0 — Flutter / SQLite',
           onTap: null,
           showChevron: false,
         ),
@@ -431,8 +356,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: context.appSurface,
-        title: Text('Limpar dados',
-            style: TextStyle(color: context.textPrimary)),
+        title:
+            Text('Limpar dados', style: TextStyle(color: context.textPrimary)),
         content: Text(
             'Isso removerá TODAS as transações permanentemente. Esta ação não pode ser desfeita.',
             style: TextStyle(color: context.textSecondary)),
@@ -470,7 +395,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       final transacoes = await AppDB.getTransacoes();
       final rows = <List<dynamic>>[
-        ['id', 'descricao', 'valor', 'categoria', 'tipo', 'banco', 'parcelas', 'primeira_parcela', 'recorrencia'],
+        [
+          'id',
+          'descricao',
+          'valor',
+          'categoria',
+          'tipo',
+          'banco',
+          'parcelas',
+          'primeira_parcela',
+          'recorrencia'
+        ],
         ...transacoes.map((t) => [
               t.id,
               t.descricao ?? '',
@@ -490,7 +425,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'financeapp_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.csv';
       final file = File('${dir.path}/$filename');
       await file.writeAsString(csv);
-      await Share.shareXFiles([XFile(file.path)], text: 'Transações FinanceApp');
+      await Share.shareXFiles([XFile(file.path)],
+          text: 'Transações FinanceApp');
     } catch (e) {
       _showSnack('Erro ao exportar: $e');
     }
@@ -513,13 +449,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       // Detect header row
-      final startRow = (rows.first.first.toString().toLowerCase() == 'id') ? 1 : 0;
+      final startRow =
+          (rows.first.first.toString().toLowerCase() == 'id') ? 1 : 0;
       int imported = 0;
       int skipped = 0;
 
       for (int i = startRow; i < rows.length; i++) {
         final row = rows[i];
-        if (row.length < 8) { skipped++; continue; }
+        if (row.length < 8) {
+          skipped++;
+          continue;
+        }
         try {
           final id = row[0].toString();
           final descricao = row[1].toString();
@@ -533,8 +473,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
           // Map tipo string → index
           final tipoMap = {
-            'entrada': 0, 'saida': 1, 'saldo': 2,
-            'receita': 3, 'investimento': 4,
+            'entrada': 0,
+            'saida': 1,
+            'saldo': 2,
+            'receita': 3,
+            'investimento': 4,
           };
           final tipoIdx = tipoMap[tipoStr] ?? (valor >= 0 ? 0 : 1);
 
@@ -560,7 +503,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
 
       AppState.notify();
-      _showSnack('$imported transações importadas${skipped > 0 ? ', $skipped ignoradas' : ''}.');
+      _showSnack(
+          '$imported transações importadas${skipped > 0 ? ', $skipped ignoradas' : ''}.');
     } catch (e) {
       _showSnack('Erro ao importar: $e');
     }
@@ -584,7 +528,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() => _biometricoAtivo = value);
     await AppDB.setConfig('biometrico_ativo', value.toString());
-    _showSnack(value ? 'Bloqueio biométrico ativado.' : 'Bloqueio biométrico desativado.');
+    _showSnack(value
+        ? 'Bloqueio biométrico ativado.'
+        : 'Bloqueio biométrico desativado.');
   }
 
   void _showSnack(String msg) {
@@ -684,8 +630,7 @@ class _NavTile extends StatelessWidget {
               ),
             ),
             if (showChevron)
-              Icon(Icons.chevron_right,
-                  size: 20, color: context.textSecondary),
+              Icon(Icons.chevron_right, size: 20, color: context.textSecondary),
           ],
         ),
       ),
@@ -735,12 +680,13 @@ class _SwitchTile extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                         color: context.textPrimary)),
                 Text(subtitle,
-                    style: TextStyle(
-                        fontSize: 12, color: context.textSecondary)),
+                    style:
+                        TextStyle(fontSize: 12, color: context.textSecondary)),
               ],
             ),
           ),
-          Switch(value: value, onChanged: onChanged, activeColor: AppColors.green),
+          Switch(
+              value: value, onChanged: onChanged, activeColor: AppColors.green),
         ],
       ),
     );
@@ -793,8 +739,8 @@ class _SliderTile extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                         color: context.textPrimary)),
                 Text(subtitle,
-                    style: TextStyle(
-                        fontSize: 12, color: context.textSecondary)),
+                    style:
+                        TextStyle(fontSize: 12, color: context.textSecondary)),
                 SliderTheme(
                   data: SliderThemeData(
                     activeTrackColor: AppColors.blue,
@@ -934,30 +880,33 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
 
   Future<void> _loadConfig() async {
     final config = await AppDB.getConfig();
-    final valor    = config['receita_base'] ?? '';
-    final diaFixo  = config['receita_base_dia_fixo'] ?? '';
-    final diaUtil  = config['receita_base_dia_util'] ?? '';
+    final valor = config['receita_base'] ?? '';
+    final diaFixo = config['receita_base_dia_fixo'] ?? '';
+    final diaUtil = config['receita_base_dia_util'] ?? '';
 
     setState(() {
-      _ctrl.text  = valor.isNotEmpty
-          ? double.tryParse(valor)?.toStringAsFixed(2).replaceAll('.', ',') ?? ''
+      _ctrl.text = valor.isNotEmpty
+          ? double.tryParse(valor)?.toStringAsFixed(2).replaceAll('.', ',') ??
+              ''
           : '';
-      _temRenda   = valor.isNotEmpty && double.tryParse(valor) != null && double.parse(valor) > 0;
-      _modoData   = diaUtil.isNotEmpty ? 'util' : 'fixo';
-      _diaFixo    = int.tryParse(diaFixo) ?? 5;
-      _nthUtil    = int.tryParse(diaUtil) ?? 5;
-      _loading    = false;
+      _temRenda = valor.isNotEmpty &&
+          double.tryParse(valor) != null &&
+          double.parse(valor) > 0;
+      _modoData = diaUtil.isNotEmpty ? 'util' : 'fixo';
+      _diaFixo = int.tryParse(diaFixo) ?? 5;
+      _nthUtil = int.tryParse(diaUtil) ?? 5;
+      _loading = false;
     });
   }
 
   Future<void> _salvar() async {
-    final raw   = _ctrl.text.trim().replaceAll(',', '.');
+    final raw = _ctrl.text.trim().replaceAll(',', '.');
     final valor = double.tryParse(raw);
     if (valor == null || valor <= 0) return;
 
     await AppDB.salvarRendaBase(
-      valor:     valor,
-      diaFixo:   _modoData == 'fixo' ? _diaFixo : null,
+      valor: valor,
+      diaFixo: _modoData == 'fixo' ? _diaFixo : null,
       nthDiaUtil: _modoData == 'util' ? _nthUtil : null,
     );
     AppState.notify();
@@ -971,17 +920,18 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
         backgroundColor: context.appSurface,
         title: Text('Remover renda base',
             style: TextStyle(color: context.textPrimary)),
-        content: Text(
-            'Isso removerá a conta Salário e a transação recorrente.',
+        content: Text('Isso removerá a conta Salário e a transação recorrente.',
             style: TextStyle(color: context.textSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text('Cancelar', style: TextStyle(color: context.textSecondary)),
+            child: Text('Cancelar',
+                style: TextStyle(color: context.textSecondary)),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Remover', style: TextStyle(color: AppColors.red)),
+            child:
+                const Text('Remover', style: TextStyle(color: AppColors.red)),
           ),
         ],
       ),
@@ -1003,7 +953,8 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
         bottom: MediaQuery.of(context).viewInsets.bottom + 28,
       ),
       child: _loading
-          ? const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()))
+          ? const SizedBox(
+              height: 120, child: Center(child: CircularProgressIndicator()))
           : SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1012,7 +963,8 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                   // Handle bar
                   Center(
                     child: Container(
-                      width: 40, height: 4,
+                      width: 40,
+                      height: 4,
                       decoration: BoxDecoration(
                         color: context.textSecondary,
                         borderRadius: BorderRadius.circular(2),
@@ -1031,22 +983,26 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                   Text(
                     'Cria uma conta "Salário" e uma entrada recorrente mensal. '
                     'Você pode adicionar ou remover valores diretamente pela tela de transações.',
-                    style: TextStyle(color: context.textSecondary, fontSize: 12),
+                    style:
+                        TextStyle(color: context.textSecondary, fontSize: 12),
                   ),
                   const SizedBox(height: 20),
 
                   // Valor
                   Text('Valor (R\$)',
-                      style: TextStyle(color: context.textSecondary, fontSize: 13)),
+                      style: TextStyle(
+                          color: context.textSecondary, fontSize: 13)),
                   const SizedBox(height: 6),
                   TextField(
                     controller: _ctrl,
                     autofocus: true,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
                     style: TextStyle(color: context.textPrimary, fontSize: 18),
                     decoration: InputDecoration(
                       prefixText: 'R\$ ',
-                      prefixStyle: const TextStyle(color: AppColors.green, fontSize: 16),
+                      prefixStyle:
+                          const TextStyle(color: AppColors.green, fontSize: 16),
                       fillColor: context.appCardLight,
                       filled: true,
                       hintText: '0,00',
@@ -1054,15 +1010,16 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                       border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(10),
                           borderSide: BorderSide.none),
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 14),
                     ),
                   ),
                   const SizedBox(height: 20),
 
                   // Modo de data
                   Text('Dia de recebimento',
-                      style: TextStyle(color: context.textSecondary, fontSize: 13)),
+                      style: TextStyle(
+                          color: context.textSecondary, fontSize: 13)),
                   const SizedBox(height: 10),
                   Row(
                     children: [
@@ -1084,7 +1041,8 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                   // Seletor de dia
                   if (_modoData == 'fixo') ...[
                     Text('Qual dia do mês?',
-                        style: TextStyle(color: context.textSecondary, fontSize: 12)),
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 12)),
                     const SizedBox(height: 8),
                     SizedBox(
                       height: 180,
@@ -1105,15 +1063,21 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                             child: AnimatedContainer(
                               duration: const Duration(milliseconds: 120),
                               decoration: BoxDecoration(
-                                color: sel ? AppColors.green : context.appCardLight,
+                                color: sel
+                                    ? AppColors.green
+                                    : context.appCardLight,
                                 borderRadius: BorderRadius.circular(8),
                               ),
                               alignment: Alignment.center,
                               child: Text('$d',
                                   style: TextStyle(
-                                    color: sel ? Colors.white : context.textPrimary,
+                                    color: sel
+                                        ? Colors.white
+                                        : context.textPrimary,
                                     fontSize: 12,
-                                    fontWeight: sel ? FontWeight.w700 : FontWeight.normal,
+                                    fontWeight: sel
+                                        ? FontWeight.w700
+                                        : FontWeight.normal,
                                   )),
                             ),
                           );
@@ -1123,11 +1087,13 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                     const SizedBox(height: 6),
                     Text(
                       'Recebimento no dia $_diaFixo de cada mês.',
-                      style: TextStyle(color: context.textSecondary, fontSize: 11),
+                      style:
+                          TextStyle(color: context.textSecondary, fontSize: 11),
                     ),
                   ] else ...[
                     Text('Qual dia útil do mês?',
-                        style: TextStyle(color: context.textSecondary, fontSize: 12)),
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 12)),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 8,
@@ -1154,7 +1120,9 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                             child: Text(
                               '${n}º D.U.',
                               style: TextStyle(
-                                color: sel ? AppColors.green : context.textSecondary,
+                                color: sel
+                                    ? AppColors.green
+                                    : context.textSecondary,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -1165,7 +1133,8 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                     ),
                     Text(
                       'Recebimento no ${_nthUtil}º dia útil (seg–sex) de cada mês.',
-                      style: TextStyle(color: context.textSecondary, fontSize: 11),
+                      style:
+                          TextStyle(color: context.textSecondary, fontSize: 11),
                     ),
                   ],
 
@@ -1184,7 +1153,8 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                         icon: const Icon(Icons.delete_outline,
                             color: AppColors.red, size: 18),
                         label: const Text('Remover renda base',
-                            style: TextStyle(color: AppColors.red, fontSize: 13)),
+                            style:
+                                TextStyle(color: AppColors.red, fontSize: 13)),
                       ),
                     ),
                   ],
@@ -1214,10 +1184,11 @@ class _ModeChip extends StatelessWidget {
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
         decoration: BoxDecoration(
-          color: selected ? AppColors.blue.withOpacity(0.2) : context.appCardLight,
+          color:
+              selected ? AppColors.blue.withOpacity(0.2) : context.appCardLight,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-              color: selected ? AppColors.blue : Colors.transparent),
+          border:
+              Border.all(color: selected ? AppColors.blue : Colors.transparent),
         ),
         child: Text(
           label,
@@ -1283,7 +1254,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
           content: const Text('Categorias padrão não podem ser removidas'),
           backgroundColor: context.appSurface,
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         ));
       }
       return;
@@ -1294,15 +1266,18 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
         backgroundColor: context.appSurface,
         title: Text('Remover "${cat['nome']}"',
             style: TextStyle(color: context.textPrimary)),
-        content: Text('Esta categoria será removida. Transações existentes não serão afetadas.',
+        content: Text(
+            'Esta categoria será removida. Transações existentes não serão afetadas.',
             style: TextStyle(color: context.textSecondary)),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
-              child: Text('Cancelar', style: TextStyle(color: context.textSecondary))),
+              child: Text('Cancelar',
+                  style: TextStyle(color: context.textSecondary))),
           TextButton(
               onPressed: () => Navigator.pop(context, true),
-              child: const Text('Remover', style: TextStyle(color: AppColors.red))),
+              child: const Text('Remover',
+                  style: TextStyle(color: AppColors.red))),
         ],
       ),
     );
@@ -1339,7 +1314,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                               fontWeight: FontWeight.w700)),
                       const SizedBox(height: 2),
                       Text('Toque para editar • Segure para reordenar',
-                          style: TextStyle(color: context.textSecondary, fontSize: 12)),
+                          style: TextStyle(
+                              color: context.textSecondary, fontSize: 12)),
                     ],
                   ),
                 ),
@@ -1351,7 +1327,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                       color: AppColors.purple.withOpacity(0.15),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: const Icon(Icons.add, color: AppColors.purple, size: 20),
+                    child: const Icon(Icons.add,
+                        color: AppColors.purple, size: 20),
                   ),
                 ),
               ],
@@ -1386,8 +1363,10 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                           final cat = _categorias[i];
                           final isPadrao = (cat['padrao'] as int) == 1;
                           final corHex = cat['cor'] as String? ?? '6B7280';
-                          final color = Color(int.parse('FF$corHex', radix: 16));
-                          final iconeKey = cat['icone'] as String? ?? 'category';
+                          final color =
+                              Color(int.parse('FF$corHex', radix: 16));
+                          final iconeKey =
+                              cat['icone'] as String? ?? 'category';
                           final icon = CategoriaHelper.iconFromName(iconeKey);
                           final tipo = cat['tipo'] as String? ?? 'ambos';
 
@@ -1461,8 +1440,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                                         padding: const EdgeInsets.symmetric(
                                             horizontal: 8, vertical: 3),
                                         decoration: BoxDecoration(
-                                          color:
-                                              context.textSecondary.withOpacity(0.1),
+                                          color: context.textSecondary
+                                              .withOpacity(0.1),
                                           borderRadius:
                                               BorderRadius.circular(20),
                                         ),
@@ -1473,7 +1452,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                                       )
                                     else
                                       Icon(Icons.drag_handle,
-                                          color: context.textSecondary, size: 20),
+                                          color: context.textSecondary,
+                                          size: 20),
                                   ],
                                 ),
                               ),
@@ -1508,9 +1488,20 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
       _isEdit && (widget.categoriaExistente!['padrao'] as int) == 1;
 
   static const _cores = [
-    'F59E0B', '3B82F6', '8B5CF6', '06B6D4', 'EC4899',
-    'EF4444', '6366F1', '22C55E', '10B981', 'F97316',
-    'A855F7', '14B8A6', 'E11D48', '6B7280',
+    'F59E0B',
+    '3B82F6',
+    '8B5CF6',
+    '06B6D4',
+    'EC4899',
+    'EF4444',
+    '6366F1',
+    '22C55E',
+    '10B981',
+    'F97316',
+    'A855F7',
+    '14B8A6',
+    'E11D48',
+    '6B7280',
   ];
 
   @override
@@ -1519,8 +1510,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
     final cat = widget.categoriaExistente;
     _nomeCtrl = TextEditingController(text: cat?['nome'] as String? ?? '');
     _icone = cat?['icone'] as String? ?? 'category';
-    _cor   = cat?['cor']   as String? ?? '6B7280';
-    _tipo  = cat?['tipo']  as String? ?? 'ambos';
+    _cor = cat?['cor'] as String? ?? '6B7280';
+    _tipo = cat?['tipo'] as String? ?? 'ambos';
   }
 
   @override
@@ -1535,9 +1526,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
     final id = _isEdit
         ? widget.categoriaExistente!['id'] as String
         : 'cat_custom_${const Uuid().v4()}';
-    final ordem = _isEdit
-        ? (widget.categoriaExistente!['ordem'] as int? ?? 99)
-        : 99;
+    final ordem =
+        _isEdit ? (widget.categoriaExistente!['ordem'] as int? ?? 99) : 99;
     await AppDB.upsertCategoria({
       'id': id,
       'nome': nome,
@@ -1557,7 +1547,9 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
 
     return Padding(
       padding: EdgeInsets.only(
-        left: 20, right: 20, top: 20,
+        left: 20,
+        right: 20,
+        top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 24,
       ),
       child: SingleChildScrollView(
@@ -1567,7 +1559,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
           children: [
             Center(
               child: Container(
-                width: 40, height: 4,
+                width: 40,
+                height: 4,
                 decoration: BoxDecoration(
                   color: context.textSecondary,
                   borderRadius: BorderRadius.circular(2),
@@ -1612,7 +1605,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
             const SizedBox(height: 20),
 
             // Nome
-            Text('Nome', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+            Text('Nome',
+                style: TextStyle(color: context.textSecondary, fontSize: 13)),
             const SizedBox(height: 6),
             TextField(
               controller: _nomeCtrl,
@@ -1635,7 +1629,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
             const SizedBox(height: 20),
 
             // Tipo
-            Text('Tipo', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+            Text('Tipo',
+                style: TextStyle(color: context.textSecondary, fontSize: 13)),
             const SizedBox(height: 8),
             Row(
               children: [
@@ -1647,7 +1642,9 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: GestureDetector(
-                      onTap: _isPadrao ? null : () => setState(() => _tipo = value),
+                      onTap: _isPadrao
+                          ? null
+                          : () => setState(() => _tipo = value),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 130),
                         padding: const EdgeInsets.symmetric(
@@ -1677,7 +1674,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
             const SizedBox(height: 20),
 
             // Cor
-            Text('Cor', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+            Text('Cor',
+                style: TextStyle(color: context.textSecondary, fontSize: 13)),
             const SizedBox(height: 8),
             Wrap(
               spacing: 10,
@@ -1698,7 +1696,10 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
                           ? Border.all(color: Colors.white, width: 2.5)
                           : null,
                       boxShadow: sel
-                          ? [BoxShadow(color: c.withOpacity(0.5), blurRadius: 6)]
+                          ? [
+                              BoxShadow(
+                                  color: c.withOpacity(0.5), blurRadius: 6)
+                            ]
                           : null,
                     ),
                     child: sel
@@ -1711,7 +1712,8 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
             const SizedBox(height: 20),
 
             // Ícone
-            Text('Ícone', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+            Text('Ícone',
+                style: TextStyle(color: context.textSecondary, fontSize: 13)),
             const SizedBox(height: 8),
             SizedBox(
               height: 120,
@@ -1809,8 +1811,7 @@ class _AparenciaSheetState extends State<_AparenciaSheet> {
       _isDark ? AppColors.textPrimaryDark : AppColors.textPrimary;
   Color get _textSecondary =>
       _isDark ? AppColors.textSecondaryDark : AppColors.textSecondary;
-  Color get _divider =>
-      _isDark ? AppColors.dividerDark : AppColors.divider;
+  Color get _divider => _isDark ? AppColors.dividerDark : AppColors.divider;
 
   AppThemePreset? get _activePreset {
     for (final p in AppThemePreset.all) {
@@ -1921,8 +1922,7 @@ class _AparenciaSheetState extends State<_AparenciaSheet> {
               GridView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
-                gridDelegate:
-                    const SliverGridDelegateWithFixedCrossAxisCount(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 4,
                   mainAxisSpacing: 12,
                   crossAxisSpacing: 12,
@@ -1971,8 +1971,7 @@ class _AparenciaSheetState extends State<_AparenciaSheet> {
                   ),
                   child: const Text(
                     'Concluído',
-                    style: TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w700),
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
                   ),
                 ),
               ),
@@ -2002,7 +2001,8 @@ class _ThemePreviewCard extends StatelessWidget {
     final bg = isDark ? AppColors.surfaceDark : AppColors.cardLight;
     final surface = isDark ? AppColors.cardLightDark : AppColors.surface;
     final textP = isDark ? AppColors.textPrimaryDark : AppColors.textPrimary;
-    final textS = isDark ? AppColors.textSecondaryDark : AppColors.textSecondary;
+    final textS =
+        isDark ? AppColors.textSecondaryDark : AppColors.textSecondary;
     final divider = isDark ? AppColors.dividerDark : AppColors.divider;
 
     return AnimatedContainer(
@@ -2039,7 +2039,10 @@ class _ThemePreviewCard extends StatelessWidget {
                           fontSize: 13,
                           fontWeight: FontWeight.w700)),
                   Text(presetName,
-                      style: TextStyle(color: primary, fontSize: 11, fontWeight: FontWeight.w600)),
+                      style: TextStyle(
+                          color: primary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600)),
                 ],
               ),
               const Spacer(),
@@ -2052,7 +2055,9 @@ class _ThemePreviewCard extends StatelessWidget {
                 child: Text(
                   isDark ? 'Escuro' : 'Claro',
                   style: TextStyle(
-                      color: primary, fontSize: 10, fontWeight: FontWeight.w700),
+                      color: primary,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700),
                 ),
               ),
             ],
@@ -2061,11 +2066,23 @@ class _ThemePreviewCard extends StatelessWidget {
           Container(height: 1, color: divider),
           const SizedBox(height: 14),
           // Mini transacoes simuladas
-          _PreviewRow(label: 'Salário', value: 'R\$ 5.000', isPositive: true,
-              primary: primary, surface: surface, textP: textP, textS: textS),
+          _PreviewRow(
+              label: 'Salário',
+              value: 'R\$ 5.000',
+              isPositive: true,
+              primary: primary,
+              surface: surface,
+              textP: textP,
+              textS: textS),
           const SizedBox(height: 8),
-          _PreviewRow(label: 'Mercado', value: '- R\$ 320', isPositive: false,
-              primary: primary, surface: surface, textP: textP, textS: textS),
+          _PreviewRow(
+              label: 'Mercado',
+              value: '- R\$ 320',
+              isPositive: false,
+              primary: primary,
+              surface: surface,
+              textP: textP,
+              textS: textS),
           const SizedBox(height: 14),
           // Mini barra de orcamento
           Column(
@@ -2133,7 +2150,9 @@ class _PreviewRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(7),
           ),
           child: Icon(
-            isPositive ? Icons.arrow_downward_rounded : Icons.arrow_upward_rounded,
+            isPositive
+                ? Icons.arrow_downward_rounded
+                : Icons.arrow_upward_rounded,
             size: 14,
             color: valueColor,
           ),
@@ -2141,7 +2160,8 @@ class _PreviewRow extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: Text(label,
-              style: TextStyle(color: textP, fontSize: 11, fontWeight: FontWeight.w500)),
+              style: TextStyle(
+                  color: textP, fontSize: 11, fontWeight: FontWeight.w500)),
         ),
         Text(value,
             style: TextStyle(
@@ -2222,9 +2242,8 @@ class _PresetTile extends StatelessWidget {
                         preset.name,
                         style: TextStyle(
                           fontSize: 9.5,
-                          fontWeight: isActive
-                              ? FontWeight.w700
-                              : FontWeight.w500,
+                          fontWeight:
+                              isActive ? FontWeight.w700 : FontWeight.w500,
                           color: darkMode
                               ? AppColors.textPrimaryDark
                               : AppColors.textPrimary,
@@ -2235,8 +2254,7 @@ class _PresetTile extends StatelessWidget {
                       ),
                       if (darkMode)
                         Icon(Icons.dark_mode_rounded,
-                            size: 9,
-                            color: AppColors.textSecondaryDark)
+                            size: 9, color: AppColors.textSecondaryDark)
                       else
                         const SizedBox(height: 9),
                     ],
@@ -2318,9 +2336,7 @@ class _ModeToggleRow extends StatelessWidget {
             ),
             child: Icon(
               isDark ? Icons.nights_stay_rounded : Icons.wb_sunny_rounded,
-              color: isDark
-                  ? const Color(0xFF6366F1)
-                  : const Color(0xFFF59E0B),
+              color: isDark ? const Color(0xFF6366F1) : const Color(0xFFF59E0B),
               size: 22,
             ),
           ),

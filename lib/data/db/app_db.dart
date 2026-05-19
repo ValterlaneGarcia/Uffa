@@ -27,13 +27,17 @@ class AppDB {
     await _insertDefaults(db);
   }
 
-  static Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+  static Future<void> _onUpgrade(
+      Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      await db.execute('ALTER TABLE transacoes ADD COLUMN recorrencia INTEGER NOT NULL DEFAULT 0');
-      await db.execute('ALTER TABLE transacoes ADD COLUMN recorrencia_grupo_id TEXT');
+      await db.execute(
+          'ALTER TABLE transacoes ADD COLUMN recorrencia INTEGER NOT NULL DEFAULT 0');
+      await db.execute(
+          'ALTER TABLE transacoes ADD COLUMN recorrencia_grupo_id TEXT');
     }
     if (oldVersion < 3) {
-      await db.execute('ALTER TABLE contas ADD COLUMN saldo REAL NOT NULL DEFAULT 0');
+      await db.execute(
+          'ALTER TABLE contas ADD COLUMN saldo REAL NOT NULL DEFAULT 0');
       await db.execute('ALTER TABLE contas ADD COLUMN icone TEXT');
       await _createMetasTable(db);
     }
@@ -53,12 +57,14 @@ class AppDB {
       await _createRecorrenciaExcecoesTable(db);
     }
     if (oldVersion < 8) {
-      await db.execute('ALTER TABLE contas ADD COLUMN saldo_inicial REAL NOT NULL DEFAULT 0');
+      await db.execute(
+          'ALTER TABLE contas ADD COLUMN saldo_inicial REAL NOT NULL DEFAULT 0');
       // Migrate: copy current saldo to saldo_inicial for existing accounts that have no transactions
       // (accounts with transactions will be recalculated on next open)
     }
     if (oldVersion < 9) {
-      await db.execute('ALTER TABLE orcamentos ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0');
+      await db.execute(
+          'ALTER TABLE orcamentos ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0');
     }
   }
 
@@ -113,12 +119,14 @@ class AppDB {
     await _createRecorrenciaExcecoesTable(db);
 
     // Indexes for performance
-    await db.execute('CREATE INDEX idx_transacoes_data ON transacoes(primeira_parcela)');
+    await db.execute(
+        'CREATE INDEX idx_transacoes_data ON transacoes(primeira_parcela)');
     await db.execute('CREATE INDEX idx_transacoes_banco ON transacoes(banco)');
   }
 
   static Future<void> _createRecorrenciaExcecoesTable(Database db) async {
-    await db.execute('''\n      CREATE TABLE IF NOT EXISTS recorrencia_excecoes (\n        id TEXT PRIMARY KEY,\n        transacao_id TEXT NOT NULL,\n        ano INTEGER NOT NULL,\n        mes INTEGER NOT NULL\n      )\n    ''');
+    await db.execute(
+        '''\n      CREATE TABLE IF NOT EXISTS recorrencia_excecoes (\n        id TEXT PRIMARY KEY,\n        transacao_id TEXT NOT NULL,\n        ano INTEGER NOT NULL,\n        mes INTEGER NOT NULL\n      )\n    ''');
     await db.execute(
       'CREATE UNIQUE INDEX IF NOT EXISTS idx_excecoes_tx_mes ON recorrencia_excecoes(transacao_id, ano, mes)',
     );
@@ -153,33 +161,36 @@ class AppDB {
   }
 
   static const _defaultCategorias = [
-    ('Alimentação',    'restaurant',               'F59E0B', 'despesa',  0),
-    ('Moradia',        'home',                     '3B82F6', 'despesa',  1),
-    ('Transporte',     'directions_car',           '8B5CF6', 'despesa',  2),
-    ('Saúde',          'favorite',                 '06B6D4', 'despesa',  3),
-    ('Lazer',          'sports_esports',           'EC4899', 'despesa',  4),
-    ('Entretenimento', 'tv',                       'EF4444', 'despesa',  5),
-    ('Educação',       'school',                   '6366F1', 'despesa',  6),
-    ('Assinatura',     'subscriptions',            '8B5CF6', 'despesa',  7),
-    ('Vestuário',      'checkroom',                'EC4899', 'despesa',  8),
-    ('Viagem',         'flight',                   '3B82F6', 'despesa',  9),
-    ('Salário',        'account_balance_wallet',   '22C55E', 'receita', 10),
-    ('Freelance',      'work',                     '22C55E', 'receita', 11),
-    ('Investimentos',  'trending_up',              '22C55E', 'receita', 12),
-    ('Outros',         'category',                 '6B7280', 'ambos',   13),
+    ('Alimentação', 'restaurant', 'F59E0B', 'despesa', 0),
+    ('Moradia', 'home', '3B82F6', 'despesa', 1),
+    ('Transporte', 'directions_car', '8B5CF6', 'despesa', 2),
+    ('Saúde', 'favorite', '06B6D4', 'despesa', 3),
+    ('Lazer', 'sports_esports', 'EC4899', 'despesa', 4),
+    ('Entretenimento', 'tv', 'EF4444', 'despesa', 5),
+    ('Educação', 'school', '6366F1', 'despesa', 6),
+    ('Assinatura', 'subscriptions', '8B5CF6', 'despesa', 7),
+    ('Vestuário', 'checkroom', 'EC4899', 'despesa', 8),
+    ('Viagem', 'flight', '3B82F6', 'despesa', 9),
+    ('Salário', 'account_balance_wallet', '22C55E', 'receita', 10),
+    ('Freelance', 'work', '22C55E', 'receita', 11),
+    ('Investimentos', 'trending_up', '22C55E', 'receita', 12),
+    ('Outros', 'category', '6B7280', 'ambos', 13),
   ];
 
   static Future<void> _insertDefaultCategorias(Database db) async {
     for (final (nome, icone, cor, tipo, ordem) in _defaultCategorias) {
-      await db.insert('categorias', {
-        'id': 'cat_$nome',
-        'nome': nome,
-        'icone': icone,
-        'cor': cor,
-        'tipo': tipo,
-        'ordem': ordem,
-        'padrao': 1,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await db.insert(
+          'categorias',
+          {
+            'id': 'cat_$nome',
+            'nome': nome,
+            'icone': icone,
+            'cor': cor,
+            'tipo': tipo,
+            'ordem': ordem,
+            'padrao': 1,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
     }
   }
 
@@ -193,11 +204,13 @@ class AppDB {
   // ── TRANSAÇÕES ──────────────────────────────────────────────
 
   static Future<List<Transacao>> getTransacoes() async {
-    final maps = await (await db).query('transacoes', orderBy: 'primeira_parcela DESC');
+    final maps =
+        await (await db).query('transacoes', orderBy: 'primeira_parcela DESC');
     return maps.map((m) => Transacao.fromMap(m)).toList();
   }
 
-  static Future<List<Transacao>> getTransacoesQueImpactamMes(int ano, int mes) async {
+  static Future<List<Transacao>> getTransacoesQueImpactamMes(
+      int ano, int mes) async {
     final inicioMes = DateTime(ano, mes, 1).toIso8601String();
     final fimMes = DateTime(ano, mes + 1, 0).toIso8601String();
 
@@ -222,7 +235,8 @@ class AppDB {
       where: 'ano = ? AND mes = ?',
       whereArgs: [ano, mes],
     );
-    final excecoes = excecoesMaps.map((e) => e['transacao_id'] as String).toSet();
+    final excecoes =
+        excecoesMaps.map((e) => e['transacao_id'] as String).toSet();
 
     return maps
         .map((m) => Transacao.fromMap(m))
@@ -241,7 +255,8 @@ class AppDB {
     return maps.map((m) => Transacao.fromMap(m)).toList();
   }
 
-  static Future<List<Transacao>> getTransacoesByCategoria(String categoria) async {
+  static Future<List<Transacao>> getTransacoesByCategoria(
+      String categoria) async {
     final maps = await (await db).query(
       'transacoes',
       where: 'categoria = ?',
@@ -260,7 +275,8 @@ class AppDB {
 
     if (dataTransacao.day >= diaFechamento) {
       // Move to next month
-      return DateTime(dataTransacao.year, dataTransacao.month + 1, dataTransacao.day);
+      return DateTime(
+          dataTransacao.year, dataTransacao.month + 1, dataTransacao.day);
     }
     return dataTransacao;
   }
@@ -270,7 +286,8 @@ class AppDB {
 
     // For credit card expenses, adjust the date based on closing day
     if (t.valor < 0 && t.banco != 'geral' && t.banco.isNotEmpty) {
-      final contaMaps = await (await db).query('contas', where: 'id = ?', whereArgs: [t.banco]);
+      final contaMaps = await (await db)
+          .query('contas', where: 'id = ?', whereArgs: [t.banco]);
       if (contaMaps.isNotEmpty) {
         final conta = Conta.fromMap(contaMaps.first);
         if (conta.tipo == 'credito') {
@@ -282,7 +299,8 @@ class AppDB {
       }
     }
 
-    await (await db).insert('transacoes', transacaoFinal.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await (await db).insert('transacoes', transacaoFinal.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
     await _recalcularSaldoConta(transacaoFinal.banco);
   }
 
@@ -293,7 +311,8 @@ class AppDB {
 
     // For credit card expenses, adjust the date based on closing day
     if (t.valor < 0 && t.banco != 'geral' && t.banco.isNotEmpty) {
-      final contaMaps = await (await db).query('contas', where: 'id = ?', whereArgs: [t.banco]);
+      final contaMaps = await (await db)
+          .query('contas', where: 'id = ?', whereArgs: [t.banco]);
       if (contaMaps.isNotEmpty) {
         final conta = Conta.fromMap(contaMaps.first);
         if (conta.tipo == 'credito') {
@@ -305,7 +324,8 @@ class AppDB {
       }
     }
 
-    await (await db).update('transacoes', transacaoFinal.toMap(), where: 'id = ?', whereArgs: [transacaoFinal.id]);
+    await (await db).update('transacoes', transacaoFinal.toMap(),
+        where: 'id = ?', whereArgs: [transacaoFinal.id]);
     if (old != null && old.banco != transacaoFinal.banco) {
       await _recalcularSaldoConta(old.banco);
     }
@@ -327,7 +347,8 @@ class AppDB {
         // Deleting the first occurrence: advance the start date to the next occurrence.
         final rawNext = DateTime(ano, mes + 1, 1);
         final lastDay = DateTime(rawNext.year, rawNext.month + 1, 0).day;
-        final next = DateTime(rawNext.year, rawNext.month, t.primeiraParcela.day.clamp(1, lastDay));
+        final next = DateTime(rawNext.year, rawNext.month,
+            t.primeiraParcela.day.clamp(1, lastDay));
         final updated = t.copyWith(primeiraParcela: next);
         await updateTransacao(updated);
       } else {
@@ -351,11 +372,13 @@ class AppDB {
   static Future<void> _recalcularSaldoConta(String bancoId) async {
     if (bancoId == 'geral' || bancoId.isEmpty) return;
 
-    final contaMaps = await (await db).query('contas', where: 'id = ?', whereArgs: [bancoId]);
+    final contaMaps =
+        await (await db).query('contas', where: 'id = ?', whereArgs: [bancoId]);
     if (contaMaps.isEmpty) return;
     final conta = Conta.fromMap(contaMaps.first);
 
-    final txMaps = await (await db).query('transacoes', where: 'banco = ?', whereArgs: [bancoId]);
+    final txMaps = await (await db)
+        .query('transacoes', where: 'banco = ?', whereArgs: [bancoId]);
     final transacoes = txMaps.map((m) => Transacao.fromMap(m)).toList();
 
     final now = DateTime.now();
@@ -423,10 +446,12 @@ class AppDB {
             }
           } else {
             // Recorrentes: soma ocorrências até o mês atual
-            final inicio = DateTime(t.primeiraParcela.year, t.primeiraParcela.month);
+            final inicio =
+                DateTime(t.primeiraParcela.year, t.primeiraParcela.month);
             var cursor = inicio;
             while (!cursor.isAfter(mesAtual)) {
-              if (!excecoes.contains('${t.id}|${cursor.year}|${cursor.month}')) {
+              if (!excecoes
+                  .contains('${t.id}|${cursor.year}|${cursor.month}')) {
                 totalDespesas += t.valorNoMes(cursor.year, cursor.month).abs();
               }
               cursor = DateTime(cursor.year, cursor.month + 1);
@@ -447,7 +472,8 @@ class AppDB {
             t.recorrencia == Recorrencia.mensal ||
             t.recorrencia == Recorrencia.anual) {
           // Soma cada mês desde a primeira parcela até o mês atual
-          final inicio = DateTime(t.primeiraParcela.year, t.primeiraParcela.month);
+          final inicio =
+              DateTime(t.primeiraParcela.year, t.primeiraParcela.month);
           var cursor = inicio;
           while (!cursor.isAfter(DateTime(now.year, now.month))) {
             // Pula meses que foram excluídos individualmente (skip-list)
@@ -465,7 +491,8 @@ class AppDB {
               1,
             );
             final lastDay = DateTime(rawDate.year, rawDate.month + 1, 0).day;
-            final dt = DateTime(rawDate.year, rawDate.month, t.primeiraParcela.day.clamp(1, lastDay));
+            final dt = DateTime(rawDate.year, rawDate.month,
+                t.primeiraParcela.day.clamp(1, lastDay));
             if (!dt.isAfter(now)) {
               movimentacao += t.valorParcela;
             }
@@ -484,7 +511,8 @@ class AppDB {
   }
 
   static Future<Transacao?> _getTransacaoById(String id) async {
-    final maps = await (await db).query('transacoes', where: 'id = ?', whereArgs: [id]);
+    final maps =
+        await (await db).query('transacoes', where: 'id = ?', whereArgs: [id]);
     if (maps.isEmpty) return null;
     return Transacao.fromMap(maps.first);
   }
@@ -500,7 +528,8 @@ class AppDB {
     // saldo_inicial captures the manually entered opening balance.
     // The saldo column will be recalculated from saldo_inicial + transactions.
     final conta = c.copyWith(saldoInicial: c.saldo);
-    await (await db).insert('contas', conta.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await (await db).insert('contas', conta.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
     // Recalculate in case there are transactions already linked to this account.
     await _recalcularSaldoConta(c.id);
   }
@@ -508,7 +537,8 @@ class AppDB {
   static Future<void> updateConta(Conta c) async {
     // Preserve existing saldo_inicial if the user didn't touch the opening balance field.
     // The caller (edit form) passes saldoInicial from the original account.
-    await (await db).update('contas', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
+    await (await db)
+        .update('contas', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
     // Recalculate saldo from saldo_inicial + transactions
     await _recalcularSaldoConta(c.id);
   }
@@ -526,12 +556,14 @@ class AppDB {
       where = 'mes = ? AND ano = ?';
       args = [mes, ano];
     }
-    final maps = await (await db).query('orcamentos', where: where, whereArgs: args);
+    final maps =
+        await (await db).query('orcamentos', where: where, whereArgs: args);
     return maps.map((m) => Orcamento.fromMap(m)).toList();
   }
 
   static Future<void> upsertOrcamento(Orcamento o) async {
-    await (await db).insert('orcamentos', o.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await (await db).insert('orcamentos', o.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   static Future<void> deleteOrcamento(String id) async {
@@ -541,7 +573,7 @@ class AppDB {
   /// Retorna o limite efetivo de um orçamento com rollover para o mês/ano alvo.
   /// Se o orçamento tiver rollover=true, acumula o saldo não gasto dos meses
   /// anteriores (retroativamente até a criação do orçamento na mesma categoria).
-  /// 
+  ///
   /// [gastoNoMes] é uma função que retorna o gasto real de uma categoria num mês.
   static Future<double> getLimiteEfetivo(
     Orcamento orcamento,
@@ -587,7 +619,8 @@ class AppDB {
       );
 
       final limiteComRollover = orcMes.limite + rolloverAcumulado;
-      final gasto = await gastoNoMes(orcamento.categoria, cursor.year, cursor.month);
+      final gasto =
+          await gastoNoMes(orcamento.categoria, cursor.year, cursor.month);
       final sobra = limiteComRollover - gasto;
       // Apenas acumula sobra positiva (não permite déficit virar rollover negativo)
       rolloverAcumulado = sobra > 0 ? sobra : 0;
@@ -607,7 +640,8 @@ class AppDB {
   }
 
   static Future<void> upsertMeta(Meta m) async {
-    await (await db).insert('metas', m.toMap(), conflictAlgorithm: ConflictAlgorithm.replace);
+    await (await db).insert('metas', m.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   static Future<void> deleteMeta(String id) async {
@@ -636,8 +670,8 @@ class AppDB {
   /// Deletes a custom (non-default) category by id.
   /// Returns false if the category is a default one (cannot be deleted).
   static Future<bool> deleteCategoria(String id) async {
-    final rows = await (await db).query('categorias',
-        where: 'id = ?', whereArgs: [id]);
+    final rows =
+        await (await db).query('categorias', where: 'id = ?', whereArgs: [id]);
     if (rows.isEmpty) return false;
     if ((rows.first['padrao'] as int) == 1) return false; // protect defaults
     await (await db).delete('categorias', where: 'id = ?', whereArgs: [id]);
@@ -662,8 +696,13 @@ class AppDB {
         conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
+  static Future<void> deleteConfig(String key) async {
+    await (await db).delete('config', where: 'key = ?', whereArgs: [key]);
+  }
+
   static Future<String?> getConfigValue(String key) async {
-    final maps = await (await db).query('config', where: 'key = ?', whereArgs: [key]);
+    final maps =
+        await (await db).query('config', where: 'key = ?', whereArgs: [key]);
     if (maps.isEmpty) return null;
     return maps.first['value'] as String;
   }
@@ -703,18 +742,21 @@ class AppDB {
       whereArgs: [_rendaContaId],
     );
     if (contaExistente.isEmpty) {
-      await database.insert('contas', {
-        'id': _rendaContaId,
-        'nome': 'Salário',
-        'limite': 0,
-        'saldo': 0,
-        'saldo_inicial': 0,
-        'tipo': 'corrente',
-        'cor': '22C55E',
-        'icone': 'salario',
-        'dia_vencimento': null,
-        'dia_fechamento': null,
-      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      await database.insert(
+          'contas',
+          {
+            'id': _rendaContaId,
+            'nome': 'Salário',
+            'limite': 0,
+            'saldo': 0,
+            'saldo_inicial': 0,
+            'tipo': 'corrente',
+            'cor': '22C55E',
+            'icone': 'salario',
+            'dia_vencimento': null,
+            'dia_fechamento': null,
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore);
     } else {
       // Garante que o nome/tipo estão corretos mesmo se o usuário editou
       await database.update(
@@ -745,18 +787,21 @@ class AppDB {
 
     // 4. Insere a transação recorrente mensal
     final txId = 'renda_base_tx';
-    await database.insert('transacoes', {
-      'id': txId,
-      'valor': valor,
-      'banco': _rendaContaId,
-      'parcelas': 1,
-      'primeira_parcela': primeiraData.toIso8601String(),
-      'categoria': 'Salário',
-      'tipo': 0, // TipoTransacao.entrada
-      'descricao': 'Renda mensal base',
-      'recorrencia': 2, // Recorrencia.mensal
-      'recorrencia_grupo_id': null,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await database.insert(
+        'transacoes',
+        {
+          'id': txId,
+          'valor': valor,
+          'banco': _rendaContaId,
+          'parcelas': 1,
+          'primeira_parcela': primeiraData.toIso8601String(),
+          'categoria': 'Salário',
+          'tipo': 0, // TipoTransacao.entrada
+          'descricao': 'Renda mensal base',
+          'recorrencia': 2, // Recorrencia.mensal
+          'recorrencia_grupo_id': null,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace);
 
     // 5. Persiste a configuração
     await setConfig('receita_base', valor.toString());
@@ -770,8 +815,10 @@ class AppDB {
   /// Remove a conta-salário e todas as transações vinculadas.
   static Future<void> removerRendaBase() async {
     final database = await db;
-    await database.delete('transacoes', where: 'banco = ?', whereArgs: [_rendaContaId]);
-    await database.delete('contas', where: 'id = ?', whereArgs: [_rendaContaId]);
+    await database
+        .delete('transacoes', where: 'banco = ?', whereArgs: [_rendaContaId]);
+    await database
+        .delete('contas', where: 'id = ?', whereArgs: [_rendaContaId]);
     await setConfig('receita_base', '');
     await setConfig('receita_base_dia_fixo', '');
     await setConfig('receita_base_dia_util', '');
