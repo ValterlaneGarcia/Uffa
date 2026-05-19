@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
@@ -10,6 +12,7 @@ import 'onboarding/onboarding_screen.dart';
 import '../utils/app_theme.dart';
 import '../utils/app_state.dart';
 import '../data/db/app_db.dart';
+import '../services/notification_service.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -37,6 +40,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
 
   DateTime? _backgroundedAt;
   DateTime? _lastUnlockTime;
+  Timer? _notificationSyncDebounce;
 
   @override
   void initState() {
@@ -50,11 +54,20 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     AppState.instance.removeListener(_onDataChanged);
+    _notificationSyncDebounce?.cancel();
     super.dispose();
   }
 
   void _onDataChanged() {
+    _queueNotificationSync();
     if (mounted) setState(() {});
+  }
+
+  void _queueNotificationSync() {
+    _notificationSyncDebounce?.cancel();
+    _notificationSyncDebounce = Timer(const Duration(milliseconds: 400), () {
+      NotificationService.syncFromDatabase();
+    });
   }
 
   Future<void> _checkOnboarding() async {
@@ -65,6 +78,9 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       _onboardingDone = done;
       _checkingOnboarding = false;
     });
+    if (done) {
+      _queueNotificationSync();
+    }
     if (done) _checkLockOnStartup();
   }
 
@@ -106,6 +122,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   }
 
   Future<void> _onAppResumed() async {
+    _queueNotificationSync();
     final config = await AppDB.getConfig();
     final biometricoAtivo = config['biometrico_ativo'] == 'true';
     if (!mounted || !biometricoAtivo || _locked || _authenticating) return;
@@ -264,8 +281,7 @@ class _LockScreen extends StatelessWidget {
                   icon: const Icon(Icons.fingerprint_rounded, size: 22),
                   label: const Text(
                     'Desbloquear',
-                    style:
-                        TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppState.instance.primaryColor,
@@ -296,8 +312,11 @@ class _BottomNav extends StatelessWidget {
   static const _items = [
     (Icons.home_rounded, Icons.home_outlined, 'Início'),
     (Icons.swap_horiz_rounded, Icons.swap_horiz_outlined, 'Transações'),
-    (Icons.account_balance_wallet_rounded,
-        Icons.account_balance_wallet_outlined, 'Contas'),
+    (
+      Icons.account_balance_wallet_rounded,
+      Icons.account_balance_wallet_outlined,
+      'Contas'
+    ),
     (Icons.bar_chart_rounded, Icons.bar_chart_outlined, 'Planejar'),
     (Icons.settings_rounded, Icons.settings_outlined, 'Mais'),
   ];
@@ -358,7 +377,8 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? AppState.instance.primaryColor : AppColors.textSecondary;
+    final color =
+        active ? AppState.instance.primaryColor : AppColors.textSecondary;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,

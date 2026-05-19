@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'services/notification_service.dart';
 import 'screens/main_shell.dart';
 import 'utils/app_theme.dart';
 import 'utils/app_state.dart';
@@ -10,6 +11,8 @@ void main() async {
   await initializeDateFormatting('pt_BR', null);
 
   await AppState.loadPreferences();
+  await NotificationService.init();
+  await NotificationService.syncFromDatabase();
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
