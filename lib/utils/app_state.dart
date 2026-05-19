@@ -1,0 +1,154 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import '../data/db/app_db.dart';
+
+// ─── Preset de tema nomeado ────────────────────────────────────────────────
+// Cada preset agrupa: nome, cor primária (hex sem alpha) e modo claro/escuro.
+// O preset 'Padrão' representa o estado de fábrica do app.
+
+class AppThemePreset {
+  final String name;
+  final String hex;        // cor primária sem alpha, ex: '16A34A'
+  final ThemeMode mode;
+  final IconData icon;
+
+  const AppThemePreset({
+    required this.name,
+    required this.hex,
+    required this.mode,
+    required this.icon,
+  });
+
+  Color get color => Color(int.parse('FF$hex', radix: 16));
+
+  static const defaultPreset = AppThemePreset(
+    name: 'Padrão',
+    hex: '16A34A',
+    mode: ThemeMode.light,
+    icon: Icons.eco_rounded,
+  );
+
+  static const List<AppThemePreset> all = [
+    defaultPreset,
+    AppThemePreset(
+      name: 'Oceano',
+      hex: '0284C7',
+      mode: ThemeMode.light,
+      icon: Icons.water_rounded,
+    ),
+    AppThemePreset(
+      name: 'Meia-noite',
+      hex: '6366F1',
+      mode: ThemeMode.dark,
+      icon: Icons.nights_stay_rounded,
+    ),
+    AppThemePreset(
+      name: 'Aurora',
+      hex: 'EC4899',
+      mode: ThemeMode.dark,
+      icon: Icons.auto_awesome_rounded,
+    ),
+    AppThemePreset(
+      name: 'Ambar',
+      hex: 'D97706',
+      mode: ThemeMode.light,
+      icon: Icons.wb_sunny_rounded,
+    ),
+    AppThemePreset(
+      name: 'Floresta',
+      hex: '059669',
+      mode: ThemeMode.dark,
+      icon: Icons.forest_rounded,
+    ),
+    AppThemePreset(
+      name: 'Rubi',
+      hex: 'DC2626',
+      mode: ThemeMode.dark,
+      icon: Icons.favorite_rounded,
+    ),
+    AppThemePreset(
+      name: 'Ciano',
+      hex: '0891B2',
+      mode: ThemeMode.light,
+      icon: Icons.waves_rounded,
+    ),
+  ];
+}
+
+/// Global notifier: any screen that mutates data calls [AppState.notify()].
+class AppState extends ChangeNotifier {
+  AppState._();
+  static final AppState instance = AppState._();
+
+  // ── Theme ─────────────────────────────────────────────────────
+  ThemeMode _themeMode = ThemeMode.light;
+  ThemeMode get themeMode => _themeMode;
+
+  // ── Primary color (hex sem alpha, ex: '16A34A') ───────────────
+  String _primaryColorHex = AppThemePreset.defaultPreset.hex;
+  String get primaryColorHex => _primaryColorHex;
+  Color get primaryColor => Color(int.parse('FF$_primaryColorHex', radix: 16));
+
+  // ── Balance visibility (global, persisted) ────────────────────
+  bool _balanceVisible = true;
+  bool get balanceVisible => _balanceVisible;
+
+  /// Preset ativo, ou null se combinação cor+modo não bate com nenhum preset.
+  AppThemePreset? get activePreset {
+    final dark = _themeMode == ThemeMode.dark;
+    for (final p in AppThemePreset.all) {
+      if (p.hex == _primaryColorHex && (p.mode == ThemeMode.dark) == dark) {
+        return p;
+      }
+    }
+    return null;
+  }
+
+  static void notify() => instance.notifyListeners();
+
+  static Future<void> loadPreferences() async {
+    final config = await AppDB.getConfig();
+
+    final darkMode = config['tema_escuro'] == 'true';
+    instance._themeMode = darkMode ? ThemeMode.dark : ThemeMode.light;
+
+    final colorHex = config['cor_primaria'];
+    if (colorHex != null && colorHex.isNotEmpty) {
+      instance._primaryColorHex = colorHex;
+    }
+
+    final balanceHidden = config['saldos_ocultos'] == 'true';
+    instance._balanceVisible = !balanceHidden;
+  }
+
+  Future<void> setThemeMode(ThemeMode mode) async {
+    _themeMode = mode;
+    await AppDB.setConfig('tema_escuro', (mode == ThemeMode.dark).toString());
+    notifyListeners();
+  }
+
+  Future<void> setPrimaryColor(String hexWithoutAlpha) async {
+    _primaryColorHex = hexWithoutAlpha;
+    await AppDB.setConfig('cor_primaria', hexWithoutAlpha);
+    notifyListeners();
+  }
+
+  /// Aplica um preset completo (cor + modo) de uma so vez.
+  Future<void> applyPreset(AppThemePreset preset) async {
+    _primaryColorHex = preset.hex;
+    _themeMode = preset.mode;
+    await AppDB.setConfig('cor_primaria', preset.hex);
+    await AppDB.setConfig(
+        'tema_escuro', (preset.mode == ThemeMode.dark).toString());
+    notifyListeners();
+  }
+
+  /// Reseta cor e modo para o padrao de fabrica.
+  Future<void> resetToDefault() => applyPreset(AppThemePreset.defaultPreset);
+
+  Future<void> toggleBalanceVisibility() async {
+    _balanceVisible = !_balanceVisible;
+    await AppDB.setConfig('saldos_ocultos', (!_balanceVisible).toString());
+    notifyListeners();
+  }
+}
