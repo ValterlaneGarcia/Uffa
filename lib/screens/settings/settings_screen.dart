@@ -3,6 +3,8 @@ import '../../services/notification_service.dart';
 import '../../data/db/app_db.dart';
 import '../../repositories/category_repository.dart';
 import '../../repositories/settings_repository.dart';
+import '../../repositories/transaction_repository.dart';
+import '../../data/models/transaction.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
 import '../../widgets/common.dart';
@@ -15,7 +17,6 @@ import 'package:share_plus/share_plus.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite/sqflite.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -26,12 +27,14 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   static const _settingsRepository = SettingsRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   String _nome = 'Usuário';
   bool _notificacoes = true;
   int _diasAviso = 3;
   int _orcamentoAlertaPercentual = 80;
   bool _loading = true;
   bool _biometricoAtivo = false;
+  String? _error;
 
   @override
   void initState() {
@@ -51,18 +54,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    final config = await _settingsRepository.getConfig();
+    if (!mounted) return;
     setState(() {
-      _nome = config['nome_usuario'] ?? 'Usuário';
-      _notificacoes = config['notificacoes_ativas'] != 'false';
-      _diasAviso = int.tryParse(config['dias_aviso_antecipado'] ?? '3') ?? 3;
-      _orcamentoAlertaPercentual = int.tryParse(
-            config[NotificationService.budgetAlertPercentConfigKey] ?? '80',
-          ) ??
-          80;
-      _biometricoAtivo = config['biometrico_ativo'] == 'true';
-      _loading = false;
+      _loading = true;
+      _error = null;
     });
+    try {
+      final config = await _settingsRepository.getConfig();
+      if (!mounted) return;
+      setState(() {
+        _nome = config['nome_usuario'] ?? 'Usuário';
+        _notificacoes = config['notificacoes_ativas'] != 'false';
+        _diasAviso = int.tryParse(config['dias_aviso_antecipado'] ?? '3') ?? 3;
+        _orcamentoAlertaPercentual = int.tryParse(
+              config[NotificationService.budgetAlertPercentConfigKey] ?? '80',
+            ) ??
+            80;
+        _biometricoAtivo = config['biometrico_ativo'] == 'true';
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   Future<void> _reagendarNotificacoes() async {
@@ -80,41 +97,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       body: _loading
           ? const LoadingState()
-          : SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 100),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Profile card
-                  _buildProfileCard(),
-                  const SizedBox(height: 24),
+          : _error != null
+              ? ErrorState(
+                  message: _error,
+                  onRetry: _load,
+                )
+              : SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(16, 20, 16, 100),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Profile card
+                      _buildProfileCard(),
+                      const SizedBox(height: 24),
 
-                  _SectionLabel('Notificações'),
-                  const SizedBox(height: 10),
-                  _buildNotificacoesSection(),
-                  const SizedBox(height: 20),
+                      _SectionLabel('Notificações'),
+                      const SizedBox(height: 10),
+                      _buildNotificacoesSection(),
+                      const SizedBox(height: 20),
 
-                  _SectionLabel('Preferências'),
-                  const SizedBox(height: 10),
-                  _buildPreferenciasSection(),
-                  const SizedBox(height: 20),
+                      _SectionLabel('Preferências'),
+                      const SizedBox(height: 10),
+                      _buildPreferenciasSection(),
+                      const SizedBox(height: 20),
 
-                  _SectionLabel('Segurança'),
-                  const SizedBox(height: 10),
-                  _buildSegurancaSection(),
-                  const SizedBox(height: 20),
+                      _SectionLabel('Segurança'),
+                      const SizedBox(height: 10),
+                      _buildSegurancaSection(),
+                      const SizedBox(height: 20),
 
-                  _SectionLabel('Dados'),
-                  const SizedBox(height: 10),
-                  _buildDadosSection(),
-                  const SizedBox(height: 20),
+                      _SectionLabel('Dados'),
+                      const SizedBox(height: 10),
+                      _buildDadosSection(),
+                      const SizedBox(height: 20),
 
-                  _SectionLabel('Sobre'),
-                  const SizedBox(height: 10),
-                  _buildSobreSection(),
-                ],
-              ),
-            ),
+                      _SectionLabel('Sobre'),
+                      const SizedBox(height: 10),
+                      _buildSobreSection(),
+                    ],
+                  ),
+                ),
     );
   }
 
@@ -314,7 +336,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.info_outline,
           iconColor: context.textSecondary,
           label: 'Versão do app',
-          subtitle: 'v2.2.0 — Flutter / SQLite',
+          subtitle: 'v2.2.1 — UFFA APP - Financeiro Pessoal',
           onTap: null,
           showChevron: false,
         ),
@@ -467,7 +489,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       for (int i = startRow; i < rows.length; i++) {
         final row = rows[i];
-        if (row.length < 8) {
+        if (row.length < 9) {
           skipped++;
           continue;
         }
@@ -486,31 +508,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ? DateTime.tryParse(row[9].toString())
                   : null;
 
-          // Map tipo string → index
-          final tipoMap = {
-            'entrada': 0,
-            'saida': 1,
-            'saldo': 2,
-            'receita': 3,
-            'investimento': 4,
-          };
-          final tipoIdx = tipoMap[tipoStr] ?? (valor >= 0 ? 0 : 1);
-
-          await (await AppDB.db).insert(
-            'transacoes',
-            {
-              'id': id.isEmpty ? const Uuid().v4() : id,
-              'descricao': descricao,
-              'valor': valor,
-              'categoria': categoria,
-              'tipo': tipoIdx,
-              'banco': banco.isEmpty ? 'geral' : banco,
-              'parcelas': parcelas,
-              'primeira_parcela': primeiraParcela.toIso8601String(),
-              'recorrencia': recorrenciaIdx,
-              'recorrencia_data_base': recorrenciaDataBase?.toIso8601String(),
-            },
-            conflictAlgorithm: ConflictAlgorithm.ignore,
+          await _transactionRepository.save(
+            Transacao(
+              id: id.isEmpty ? const Uuid().v4() : id,
+              descricao: descricao,
+              valor: valor,
+              categoria: categoria,
+              tipo: TipoTransacaoParser.fromString(tipoStr, valor: valor),
+              banco: banco.isEmpty ? 'geral' : banco,
+              parcelas: parcelas,
+              primeiraParcela: primeiraParcela,
+              recorrencia: recorrenciaIdx >= 0 &&
+                      recorrenciaIdx < Recorrencia.values.length
+                  ? Recorrencia.values[recorrenciaIdx]
+                  : Recorrencia.nenhuma,
+              recorrenciaDataBase: recorrenciaDataBase,
+            ),
           );
           imported++;
         } catch (_) {

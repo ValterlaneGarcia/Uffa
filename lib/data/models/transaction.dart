@@ -2,6 +2,16 @@ import 'package:uuid/uuid.dart';
 
 enum TipoTransacao { entrada, saida, saldo, receita, investimento }
 
+extension TipoTransacaoParser on TipoTransacao {
+  static TipoTransacao fromString(String value, {double valor = 0}) {
+    final normalized = value.trim().toLowerCase();
+    for (final tipo in TipoTransacao.values) {
+      if (tipo.name == normalized) return tipo;
+    }
+    return valor < 0 ? TipoTransacao.saida : TipoTransacao.receita;
+  }
+}
+
 enum Recorrencia { nenhuma, semanal, mensal, anual }
 
 class Transacao {

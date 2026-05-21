@@ -44,6 +44,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Transacao> _recentes = [];
   bool _loading = true;
   String _nomeUsuario = 'Usuário';
+  String? _error;
 
   @override
   void initState() {
@@ -66,18 +67,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _loadData() async {
     if (!mounted) return;
-    setState(() => _loading = true);
-    final data = await FinanceService.loadDashboardData(_selectedMonth);
-
-    if (!mounted) return;
     setState(() {
-      _summary = data.summary;
-      _yearly = data.yearly;
-      _contas = data.contas;
-      _recentes = data.recentes;
-      _nomeUsuario = data.nomeUsuario;
-      _loading = false;
+      _loading = true;
+      _error = null;
     });
+    try {
+      final data = await FinanceService.loadDashboardData(_selectedMonth);
+
+      if (!mounted) return;
+      setState(() {
+        _summary = data.summary;
+        _yearly = data.yearly;
+        _contas = data.contas;
+        _recentes = data.recentes;
+        _nomeUsuario = data.nomeUsuario;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   void _prevMonth() {
@@ -108,35 +120,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
       backgroundColor: context.appBackground,
       body: _loading
           ? const LoadingState()
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              color: context.primary,
-              backgroundColor: context.appSurface,
-              child: CustomScrollView(
-                slivers: [
-                  SliverToBoxAdapter(child: _buildHeader()),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                    sliver: SliverList(
-                      delegate: SliverChildListDelegate([
-                        const SizedBox(height: 20),
-                        _buildSummaryCards(),
-                        const SizedBox(height: 20),
-                        _buildMonthlyChart(),
-                        const SizedBox(height: 20),
-                        _buildAccountsSection(),
-                        if (_recentes.isNotEmpty) ...[
-                          const SizedBox(height: 20),
-                          _buildRecentTransactions(),
-                        ],
-                        const SizedBox(height: 20),
-                        _buildQuickActions(),
-                      ]),
-                    ),
+          : _error != null
+              ? ErrorState(
+                  message: _error,
+                  onRetry: _loadData,
+                )
+              : RefreshIndicator(
+                  onRefresh: _loadData,
+                  color: context.primary,
+                  backgroundColor: context.appSurface,
+                  child: CustomScrollView(
+                    slivers: [
+                      SliverToBoxAdapter(child: _buildHeader()),
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                        sliver: SliverList(
+                          delegate: SliverChildListDelegate([
+                            const SizedBox(height: 20),
+                            _buildSummaryCards(),
+                            const SizedBox(height: 20),
+                            _buildMonthlyChart(),
+                            const SizedBox(height: 20),
+                            _buildAccountsSection(),
+                            if (_recentes.isNotEmpty) ...[
+                              const SizedBox(height: 20),
+                              _buildRecentTransactions(),
+                            ],
+                            const SizedBox(height: 20),
+                            _buildQuickActions(),
+                          ]),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
     );
   }
 
