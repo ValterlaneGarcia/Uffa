@@ -21,6 +21,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
   static const _accountRepository = AccountRepository.instance;
   List<Conta> _contas = [];
   bool _loading = true;
+  String? _error;
   late bool _balanceVisible;
   bool _hasLocalBalanceOverride = false;
 
@@ -54,13 +55,24 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
-    setState(() => _loading = true);
-    final c = await _accountRepository.getAll();
-    if (!mounted) return;
     setState(() {
-      _contas = c;
-      _loading = false;
+      _loading = true;
+      _error = null;
     });
+    try {
+      final c = await _accountRepository.getAll();
+      if (!mounted) return;
+      setState(() {
+        _contas = c;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   double get _totalPatrimonio =>
@@ -76,116 +88,121 @@ class _AccountsScreenState extends State<AccountsScreen> {
       backgroundColor: context.appBackground,
       body: _loading
           ? const LoadingState()
-          : RefreshIndicator(
-              onRefresh: _load,
-              color: context.primary,
-              backgroundColor: context.appSurface,
-              child: CustomScrollView(
-                slivers: [
-                  SliverAppBar(
-                    backgroundColor: context.appBackground,
-                    leading: IconButton(
-                      icon: Icon(Icons.arrow_back_ios_new,
-                          size: 18, color: context.textPrimary),
-                      onPressed: () => Navigator.canPop(context)
-                          ? Navigator.pop(context)
-                          : null,
-                    ),
-                    title: Text('Minhas contas',
-                        style: TextStyle(color: context.textPrimary)),
-                    actions: [
-                      IconButton(
-                        icon: Icon(
-                          _balanceVisible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                          color: context.textSecondary,
+          : _error != null
+              ? ErrorState(
+                  message: _error,
+                  onRetry: _load,
+                )
+              : RefreshIndicator(
+                  onRefresh: _load,
+                  color: context.primary,
+                  backgroundColor: context.appSurface,
+                  child: CustomScrollView(
+                    slivers: [
+                      SliverAppBar(
+                        backgroundColor: context.appBackground,
+                        leading: IconButton(
+                          icon: Icon(Icons.arrow_back_ios_new,
+                              size: 18, color: context.textPrimary),
+                          onPressed: () => Navigator.canPop(context)
+                              ? Navigator.pop(context)
+                              : null,
                         ),
-                        onPressed: _toggleBalanceVisibility,
+                        title: Text('Minhas contas',
+                            style: TextStyle(color: context.textPrimary)),
+                        actions: [
+                          IconButton(
+                            icon: Icon(
+                              _balanceVisible
+                                  ? Icons.visibility_outlined
+                                  : Icons.visibility_off_outlined,
+                              color: context.textSecondary,
+                            ),
+                            onPressed: _toggleBalanceVisibility,
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.swap_horiz_rounded,
+                                color: context.textSecondary),
+                            tooltip: 'Transferência',
+                            onPressed: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                    builder: (_) => const TransferScreen()),
+                              );
+                              AppState.notify();
+                            },
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.add, color: context.primary),
+                            onPressed: _addConta,
+                          ),
+                        ],
+                        pinned: true,
                       ),
-                      IconButton(
-                        icon: Icon(Icons.swap_horiz_rounded,
-                            color: context.textSecondary),
-                        tooltip: 'Transferência',
-                        onPressed: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                                builder: (_) => const TransferScreen()),
-                          );
-                          AppState.notify();
-                        },
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.add, color: context.primary),
-                        onPressed: _addConta,
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                        sliver: SliverList(
+                          delegate: SliverChildListDelegate([
+                            _buildTotalCard(),
+                            const SizedBox(height: 20),
+                            if (_contas.isEmpty) ...[
+                              AppCard(
+                                child: EmptyState(
+                                  icon: Icons.account_balance_wallet_outlined,
+                                  title: 'Nenhuma conta cadastrada',
+                                  subtitle:
+                                      'Toque em + para adicionar sua primeira conta ou cartão',
+                                  accentColor: AppColors.blue,
+                                ),
+                              ),
+                            ] else ...[
+                              if (_contas.any((c) => c.tipo == 'credito')) ...[
+                                SectionHeader(title: 'Cartões de crédito'),
+                                const SizedBox(height: 12),
+                                ..._contas
+                                    .where((c) => c.tipo == 'credito')
+                                    .map((c) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 12),
+                                          child: _ContaCard(
+                                            conta: c,
+                                            visible: _balanceVisible,
+                                            canManage: !_accountRepository
+                                                .isManagedBalanceAccount(c),
+                                            onTap: () => _openDetail(c),
+                                            onEdit: () => _editConta(c),
+                                            onDelete: () => _deleteConta(c),
+                                          ),
+                                        )),
+                              ],
+                              if (_contas.any((c) => c.tipo != 'credito')) ...[
+                                const SizedBox(height: 8),
+                                SectionHeader(title: 'Contas e carteiras'),
+                                const SizedBox(height: 12),
+                                ..._contas
+                                    .where((c) => c.tipo != 'credito')
+                                    .map((c) => Padding(
+                                          padding:
+                                              const EdgeInsets.only(bottom: 12),
+                                          child: _ContaCard(
+                                            conta: c,
+                                            visible: _balanceVisible,
+                                            canManage: !_accountRepository
+                                                .isManagedBalanceAccount(c),
+                                            onTap: () => _openDetail(c),
+                                            onEdit: () => _editConta(c),
+                                            onDelete: () => _deleteConta(c),
+                                          ),
+                                        )),
+                              ],
+                            ],
+                          ]),
+                        ),
                       ),
                     ],
-                    pinned: true,
                   ),
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
-                    sliver: SliverList(
-                      delegate: SliverChildListDelegate([
-                        _buildTotalCard(),
-                        const SizedBox(height: 20),
-                        if (_contas.isEmpty) ...[
-                          AppCard(
-                            child: EmptyState(
-                              icon: Icons.account_balance_wallet_outlined,
-                              title: 'Nenhuma conta cadastrada',
-                              subtitle:
-                                  'Toque em + para adicionar sua primeira conta ou cartão',
-                              accentColor: AppColors.blue,
-                            ),
-                          ),
-                        ] else ...[
-                          if (_contas.any((c) => c.tipo == 'credito')) ...[
-                            SectionHeader(title: 'Cartões de crédito'),
-                            const SizedBox(height: 12),
-                            ..._contas
-                                .where((c) => c.tipo == 'credito')
-                                .map((c) => Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 12),
-                                      child: _ContaCard(
-                                        conta: c,
-                                        visible: _balanceVisible,
-                                        canManage: !_accountRepository
-                                            .isManagedBalanceAccount(c),
-                                        onTap: () => _openDetail(c),
-                                        onEdit: () => _editConta(c),
-                                        onDelete: () => _deleteConta(c),
-                                      ),
-                                    )),
-                          ],
-                          if (_contas.any((c) => c.tipo != 'credito')) ...[
-                            const SizedBox(height: 8),
-                            SectionHeader(title: 'Contas e carteiras'),
-                            const SizedBox(height: 12),
-                            ..._contas
-                                .where((c) => c.tipo != 'credito')
-                                .map((c) => Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 12),
-                                      child: _ContaCard(
-                                        conta: c,
-                                        visible: _balanceVisible,
-                                        canManage: !_accountRepository
-                                            .isManagedBalanceAccount(c),
-                                        onTap: () => _openDetail(c),
-                                        onEdit: () => _editConta(c),
-                                        onDelete: () => _deleteConta(c),
-                                      ),
-                                    )),
-                          ],
-                        ],
-                      ]),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+                ),
     );
   }
 

@@ -161,13 +161,33 @@ class MonthSelectorPill extends StatelessWidget {
 
   // Lista fixa de meses (constante)
   static const List<String> meses = [
-    'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-    'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+    'Janeiro',
+    'Fevereiro',
+    'Março',
+    'Abril',
+    'Maio',
+    'Junho',
+    'Julho',
+    'Agosto',
+    'Setembro',
+    'Outubro',
+    'Novembro',
+    'Dezembro'
   ];
 
   static const List<String> mesesAbrev = [
-    'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+    'Jan',
+    'Fev',
+    'Mar',
+    'Abr',
+    'Mai',
+    'Jun',
+    'Jul',
+    'Ago',
+    'Set',
+    'Out',
+    'Nov',
+    'Dez'
   ];
 
   const MonthSelectorPill({
@@ -228,6 +248,7 @@ class EmptyState extends StatelessWidget {
   final String? subtitle;
   final String? actionLabel;
   final VoidCallback? onAction;
+
   /// Optional accent color for the icon rings. Defaults to primary color.
   final Color? accentColor;
 
@@ -296,9 +317,7 @@ class EmptyState extends StatelessWidget {
               Text(
                 subtitle!,
                 style: TextStyle(
-                    fontSize: 13,
-                    color: context.textSecondary,
-                    height: 1.5),
+                    fontSize: 13, color: context.textSecondary, height: 1.5),
                 textAlign: TextAlign.center,
               ),
             ],
@@ -311,8 +330,8 @@ class EmptyState extends StatelessWidget {
                 style: FilledButton.styleFrom(
                   backgroundColor: color,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12)),
                   textStyle: const TextStyle(
@@ -327,7 +346,6 @@ class EmptyState extends StatelessWidget {
   }
 }
 
-
 /// Loading state
 class LoadingState extends StatelessWidget {
   const LoadingState({super.key});
@@ -338,6 +356,85 @@ class LoadingState extends StatelessWidget {
       child: CircularProgressIndicator(
         color: context.primary,
         strokeWidth: 2,
+      ),
+    );
+  }
+}
+
+class ErrorState extends StatelessWidget {
+  final String title;
+  final String? message;
+  final VoidCallback? onRetry;
+
+  const ErrorState({
+    super.key,
+    this.title = 'Erro ao carregar dados',
+    this.message,
+    this.onRetry,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 48),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: AppColors.red.withOpacity(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.error_outline_rounded,
+                color: AppColors.red,
+                size: 28,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                color: context.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            if (message != null && message!.trim().isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                message!,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: context.textSecondary,
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            if (onRetry != null) ...[
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('Tentar novamente'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: context.primary,
+                  foregroundColor: Colors.white,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -387,48 +484,48 @@ class ValueDisplay extends StatelessWidget {
 /// Category icon + color helper
 class CategoriaHelper {
   static const Map<String, IconData> _iconMap = {
-    'restaurant':               Icons.restaurant_rounded,
-    'home':                     Icons.home_rounded,
-    'directions_car':           Icons.directions_car_rounded,
-    'favorite':                 Icons.favorite_rounded,
-    'sports_esports':           Icons.sports_esports_rounded,
-    'tv':                       Icons.tv_rounded,
-    'school':                   Icons.school_rounded,
-    'account_balance_wallet':   Icons.account_balance_wallet_rounded,
-    'work':                     Icons.work_rounded,
-    'trending_up':              Icons.trending_up_rounded,
-    'category':                 Icons.category_rounded,
-    'subscriptions':            Icons.subscriptions_rounded,
-    'checkroom':                Icons.checkroom_rounded,
-    'flight':                   Icons.flight_rounded,
-    'local_grocery_store':      Icons.local_grocery_store_rounded,
-    'phone_android':            Icons.phone_android_rounded,
-    'fitness_center':           Icons.fitness_center_rounded,
-    'pets':                     Icons.pets_rounded,
-    'child_care':               Icons.child_care_rounded,
-    'coffee':                   Icons.coffee_rounded,
-    'sports_bar':               Icons.sports_bar_rounded,
-    'music_note':               Icons.music_note_rounded,
-    'palette':                  Icons.palette_rounded,
-    'construction':             Icons.construction_rounded,
-    'attach_money':             Icons.attach_money_rounded,
+    'restaurant': Icons.restaurant_rounded,
+    'home': Icons.home_rounded,
+    'directions_car': Icons.directions_car_rounded,
+    'favorite': Icons.favorite_rounded,
+    'sports_esports': Icons.sports_esports_rounded,
+    'tv': Icons.tv_rounded,
+    'school': Icons.school_rounded,
+    'account_balance_wallet': Icons.account_balance_wallet_rounded,
+    'work': Icons.work_rounded,
+    'trending_up': Icons.trending_up_rounded,
+    'category': Icons.category_rounded,
+    'subscriptions': Icons.subscriptions_rounded,
+    'checkroom': Icons.checkroom_rounded,
+    'flight': Icons.flight_rounded,
+    'local_grocery_store': Icons.local_grocery_store_rounded,
+    'phone_android': Icons.phone_android_rounded,
+    'fitness_center': Icons.fitness_center_rounded,
+    'pets': Icons.pets_rounded,
+    'child_care': Icons.child_care_rounded,
+    'coffee': Icons.coffee_rounded,
+    'sports_bar': Icons.sports_bar_rounded,
+    'music_note': Icons.music_note_rounded,
+    'palette': Icons.palette_rounded,
+    'construction': Icons.construction_rounded,
+    'attach_money': Icons.attach_money_rounded,
   };
 
   static const _map = {
-    'Alimentação':    (Icons.restaurant_rounded,             Color(0xFFF59E0B)),
-    'Moradia':        (Icons.home_rounded,                   Color(0xFF2563EB)),
-    'Transporte':     (Icons.directions_car_rounded,         Color(0xFF7C3AED)),
-    'Saúde':          (Icons.favorite_rounded,               Color(0xFF0891B2)),
-    'Lazer':          (Icons.sports_esports_rounded,         Color(0xFFEC4899)),
-    'Entretenimento': (Icons.tv_rounded,                     Color(0xFFDC2626)),
-    'Educação':       (Icons.school_rounded,                 Color(0xFF4F46E5)),
-    'Salário':        (Icons.account_balance_wallet_rounded, Color(0xFF16A34A)),
-    'Freelance':      (Icons.work_rounded,                   Color(0xFF16A34A)),
-    'Investimentos':  (Icons.trending_up_rounded,            Color(0xFF16A34A)),
-    'Outros':         (Icons.category_rounded,               Color(0xFF6B7280)),
-    'Assinatura':     (Icons.subscriptions_rounded,          Color(0xFF7C3AED)),
-    'Vestuário':      (Icons.checkroom_rounded,              Color(0xFFEC4899)),
-    'Viagem':         (Icons.flight_rounded,                 Color(0xFF2563EB)),
+    'Alimentação': (Icons.restaurant_rounded, Color(0xFFF59E0B)),
+    'Moradia': (Icons.home_rounded, Color(0xFF2563EB)),
+    'Transporte': (Icons.directions_car_rounded, Color(0xFF7C3AED)),
+    'Saúde': (Icons.favorite_rounded, Color(0xFF0891B2)),
+    'Lazer': (Icons.sports_esports_rounded, Color(0xFFEC4899)),
+    'Entretenimento': (Icons.tv_rounded, Color(0xFFDC2626)),
+    'Educação': (Icons.school_rounded, Color(0xFF4F46E5)),
+    'Salário': (Icons.account_balance_wallet_rounded, Color(0xFF16A34A)),
+    'Freelance': (Icons.work_rounded, Color(0xFF16A34A)),
+    'Investimentos': (Icons.trending_up_rounded, Color(0xFF16A34A)),
+    'Outros': (Icons.category_rounded, Color(0xFF6B7280)),
+    'Assinatura': (Icons.subscriptions_rounded, Color(0xFF7C3AED)),
+    'Vestuário': (Icons.checkroom_rounded, Color(0xFFEC4899)),
+    'Viagem': (Icons.flight_rounded, Color(0xFF2563EB)),
   };
 
   static final Map<String, (IconData, Color)> _cache = {};
@@ -464,13 +561,23 @@ class CategoriaHelper {
   static IconData iconFromName(String name) =>
       _iconMap[name] ?? Icons.category_rounded;
 
-  static List<(String, IconData)> get availableIcons => _iconMap.entries
-      .map((e) => (e.key, e.value))
-      .toList();
+  static List<(String, IconData)> get availableIcons =>
+      _iconMap.entries.map((e) => (e.key, e.value)).toList();
 
   static const List<String> todas = [
-    'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Lazer',
-    'Entretenimento', 'Educação', 'Vestuário', 'Viagem', 'Assinatura',
-    'Salário', 'Freelance', 'Investimentos', 'Outros',
+    'Alimentação',
+    'Moradia',
+    'Transporte',
+    'Saúde',
+    'Lazer',
+    'Entretenimento',
+    'Educação',
+    'Vestuário',
+    'Viagem',
+    'Assinatura',
+    'Salário',
+    'Freelance',
+    'Investimentos',
+    'Outros',
   ];
 }

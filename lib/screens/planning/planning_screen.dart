@@ -32,6 +32,7 @@ class _PlanningScreenState extends State<PlanningScreen>
   List<Map<String, double>> _yearlyData = [];
   bool _loadingRelatorios = false;
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
@@ -50,16 +51,27 @@ class _PlanningScreenState extends State<PlanningScreen>
 
   Future<void> _loadData() async {
     if (!mounted) return;
-    setState(() => _loading = true);
-    final data = await FinanceService.loadPlanningData(_selectedMonth);
-    if (!mounted) return;
     setState(() {
-      _summary = data.summary;
-      _metas = data.metas;
-      _orcamentos = data.orcamentos;
-      _yearlyData = data.yearly;
-      _loading = false;
+      _loading = true;
+      _error = null;
     });
+    try {
+      final data = await FinanceService.loadPlanningData(_selectedMonth);
+      if (!mounted) return;
+      setState(() {
+        _summary = data.summary;
+        _metas = data.metas;
+        _orcamentos = data.orcamentos;
+        _yearlyData = data.yearly;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = e.toString();
+      });
+    }
   }
 
   @override
@@ -100,15 +112,20 @@ class _PlanningScreenState extends State<PlanningScreen>
       ),
       body: _loading
           ? const LoadingState()
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _buildResumoTab(),
-                _buildOrcamentosTab(),
-                _buildMetasTab(),
-                _buildRelatoriosTab(),
-              ],
-            ),
+          : _error != null
+              ? ErrorState(
+                  message: _error,
+                  onRetry: _loadData,
+                )
+              : TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildResumoTab(),
+                    _buildOrcamentosTab(),
+                    _buildMetasTab(),
+                    _buildRelatoriosTab(),
+                  ],
+                ),
     );
   }
 
