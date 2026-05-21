@@ -8,6 +8,7 @@ import 'package:timezone/timezone.dart' as tz;
 import '../data/db/app_db.dart';
 import '../data/models/conta.dart';
 import '../data/models/orcamento.dart';
+import '../data/models/transaction.dart';
 import 'finance_service.dart';
 
 class NotificationService {
@@ -30,11 +31,12 @@ class NotificationService {
   static const int _budgetNotificationBaseId = 30000;
   static const int _goalNotificationBaseId = 40000;
   static const int _insightNotificationBaseId = 50000;
+  static const int _recurringNotificationBaseId = 60000;
   static const String _budgetAlertConfigPrefix = 'orcamento_alertado';
 
   static const AndroidNotificationDetails _androidDetails =
       AndroidNotificationDetails(
-    'financeapp_lembretes',
+    'Uffa_lembretes',
     'Lembretes financeiros',
     channelDescription: 'Avisos de vencimentos, renda base e orcamentos',
     importance: Importance.high,
@@ -88,6 +90,7 @@ class NotificationService {
 
     await _scheduleBillingNotifications(contas, diasAviso);
     await _scheduleSalaryReminder(config);
+    await _scheduleRecurringTransactionNotifications();
     await notifyBudgetThresholdsIfNeeded(
       thresholdPercent: thresholdPercent,
       config: config,
@@ -131,18 +134,33 @@ class NotificationService {
       if (item.percentualUsado < threshold / 100) continue;
 
       final categoriaId = Uri.encodeComponent(item.orcamento.categoria);
+      final statusKey = item.estourado
+          ? 'estourado'
+          : item.percentualUsado >= 1
+              ? 'concluido'
+              : 'alerta';
       final dedupeKey =
-          '${_budgetAlertConfigPrefix}_${now.year}_${now.month}_${categoriaId}_$threshold';
+          '${_budgetAlertConfigPrefix}_${now.year}_${now.month}_${categoriaId}_${statusKey}_$threshold';
       if (effectiveConfig[dedupeKey] == 'true') continue;
 
       final percentRounded = (item.percentualUsado * 100).round();
       final saldoDisponivel =
           (item.limiteEfetivo - item.gastoReal).clamp(0.0, double.infinity);
+      final title = item.estourado
+          ? 'Orçamento ultrapassado'
+          : item.percentualUsado >= 1
+              ? 'Orçamento concluído'
+              : 'Orçamento em alerta';
+      final body = item.estourado
+          ? '${item.orcamento.categoria} passou do limite mensal em ${percentRounded - 100}%.'
+          : item.percentualUsado >= 1
+              ? '${item.orcamento.categoria} consumiu todo o limite deste mês.'
+              : '${item.orcamento.categoria} ja consumiu $percentRounded% do limite mensal. Restam R\$ ${saldoDisponivel.toStringAsFixed(2)}.';
 
       await _plugin.show(
         _budgetNotificationBaseId + _stableId(dedupeKey),
-        'Orcamento em alerta',
-        '${item.orcamento.categoria} ja consumiu $percentRounded% do limite mensal. Restam R\$ ${saldoDisponivel.toStringAsFixed(2)}.',
+        title,
+        body,
         _notificationDetails,
       );
 
@@ -274,6 +292,43 @@ class NotificationService {
     }
   }
 
+  static Future<void> _scheduleRecurringTransactionNotifications() async {
+    final now = DateTime.now();
+    final transacoes = await AppDB.getTransacoes();
+    final recorrentes = transacoes
+        .where(
+            (t) => t.recorrencia != Recorrencia.nenhuma && !t.isTransferencia)
+        .toList();
+
+    for (final t in recorrentes) {
+      for (int i = 0; i < 3; i++) {
+        final ocorrencia = _occurrenceDate(t, i, now);
+        if (ocorrencia == null || !ocorrencia.isAfter(now)) continue;
+
+        final titulo =
+            t.valor < 0 ? 'Despesa recorrente' : 'Receita recorrente';
+        final descricaoBase = t.descricao?.trim().isNotEmpty == true
+            ? t.descricao!.trim()
+            : t.categoria;
+
+        await _plugin.zonedSchedule(
+          _recurringNotificationBaseId +
+              _stableId('${t.id}_${ocorrencia.toIso8601String()}'),
+          titulo,
+          '$descricaoBase em ${dt(ocorrencia)} no valor de R\$ ${t.valor.abs().toStringAsFixed(2)}.',
+          tz.TZDateTime.from(
+            DateTime(ocorrencia.year, ocorrencia.month, ocorrencia.day, 8),
+            tz.local,
+          ),
+          _notificationDetails,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          uiLocalNotificationDateInterpretation:
+              UILocalNotificationDateInterpretation.absoluteTime,
+        );
+      }
+    }
+  }
+
   static DateTime _fixedDayOfMonth(int year, int month, int day) {
     final lastDay = DateTime(year, month + 1, 0).day;
     return DateTime(year, month, day.clamp(1, lastDay));
@@ -296,11 +351,51 @@ class NotificationService {
     final pendentes = await _plugin.pendingNotificationRequests();
     for (final pending in pendentes) {
       if (pending.id >= _billingNotificationBaseId &&
-          pending.id < _goalNotificationBaseId) {
+          pending.id < (_recurringNotificationBaseId + 9999)) {
         await _plugin.cancel(pending.id);
       }
     }
   }
+
+  static DateTime? _occurrenceDate(
+    Transacao t,
+    int offset,
+    DateTime now,
+  ) {
+    switch (t.recorrencia) {
+      case Recorrencia.semanal:
+        final baseDate = t.dataBaseRecorrencia;
+        var base = DateTime(
+          now.year,
+          now.month,
+          now.day,
+          baseDate.hour,
+          baseDate.minute,
+        );
+        while (base.weekday != baseDate.weekday) {
+          base = base.add(const Duration(days: 1));
+        }
+        return base.add(Duration(days: 7 * offset));
+      case Recorrencia.mensal:
+        return _fixedDayOfMonth(
+          now.year,
+          now.month + offset,
+          t.dataBaseRecorrencia.day,
+        );
+      case Recorrencia.anual:
+        final baseDate = t.dataBaseRecorrencia;
+        return DateTime(
+          now.year + offset,
+          baseDate.month,
+          baseDate.day,
+        );
+      case Recorrencia.nenhuma:
+        return null;
+    }
+  }
+
+  static String dt(DateTime value) =>
+      '${value.day.toString().padLeft(2, '0')}/${value.month.toString().padLeft(2, '0')}';
 
   static Future<void> notifyGoalMilestonesIfNeeded({
     Map<String, String>? config,

@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/conta.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
@@ -19,6 +20,8 @@ class TransactionsScreen extends StatefulWidget {
 
 class _TransactionsScreenState extends State<TransactionsScreen>
     with SingleTickerProviderStateMixin {
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   late TabController _tabController;
   DateTime _selectedMonth = DateTime.now();
   List<Transacao> _transacoes = [];
@@ -28,22 +31,23 @@ class _TransactionsScreenState extends State<TransactionsScreen>
   bool _showSearch = false;
 
   // ── Filtros avançados ─────────────────────────────
-  String? _filtroContaId;       // null = todas
-  String? _filtroCategoriaId;   // null = todas
+  String? _filtroContaId; // null = todas
+  String? _filtroCategoriaId; // null = todas
   _OrdemTransacao _ordem = _OrdemTransacao.data;
   bool _showFilters = false;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this, initialIndex: widget.initialTab);
+    _tabController =
+        TabController(length: 3, vsync: this, initialIndex: widget.initialTab);
     _loadData();
-    AppState.instance.addListener(_loadData);
+    AppState.dataChanges.addListener(_loadData);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_loadData);
+    AppState.dataChanges.removeListener(_loadData);
     _tabController.dispose();
     super.dispose();
   }
@@ -51,9 +55,9 @@ class _TransactionsScreenState extends State<TransactionsScreen>
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    final all = await AppDB.getTransacoesQueImpactamMes(
+    final all = await _transactionRepository.getForMonth(
         _selectedMonth.year, _selectedMonth.month);
-    final contas = await AppDB.getContas();
+    final contas = await _accountRepository.getAll();
     if (!mounted) return;
     setState(() {
       _transacoes = all;
@@ -63,30 +67,32 @@ class _TransactionsScreenState extends State<TransactionsScreen>
   }
 
   void _prevMonth() {
-    setState(() => _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month - 1));
+    setState(() => _selectedMonth =
+        DateTime(_selectedMonth.year, _selectedMonth.month - 1));
     _loadData();
   }
 
   void _nextMonth() {
-    setState(() => _selectedMonth = DateTime(_selectedMonth.year, _selectedMonth.month + 1));
+    setState(() => _selectedMonth =
+        DateTime(_selectedMonth.year, _selectedMonth.month + 1));
     _loadData();
   }
 
   // Transferências (tipo=saldo): pagamentos de fatura e transferências entre contas.
   // Aparecem na aba "Todas" mas não distorcem os totais de Despesas/Receitas.
-  bool _isTransferencia(Transacao t) => t.tipo == TipoTransacao.saldo;
+  bool _isTransferencia(Transacao t) => t.isTransferencia;
 
-  List<Transacao> get _despesas => _transacoes
-      .where((t) => t.valor < 0 && !_isTransferencia(t))
-      .toList();
-  List<Transacao> get _receitas => _transacoes
-      .where((t) => t.valor > 0 && !_isTransferencia(t))
-      .toList();
+  List<Transacao> get _despesas =>
+      _transacoes.where((t) => t.valor < 0 && !_isTransferencia(t)).toList();
+  List<Transacao> get _receitas =>
+      _transacoes.where((t) => t.valor > 0 && !_isTransferencia(t)).toList();
 
   double get _totalDespesas => _despesas.fold(
-      0, (s, t) => s + t.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs());
-  double get _totalReceitas =>
-      _receitas.fold(0, (s, t) => s + t.valorNoMes(_selectedMonth.year, _selectedMonth.month));
+      0,
+      (s, t) =>
+          s + t.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs());
+  double get _totalReceitas => _receitas.fold(
+      0, (s, t) => s + t.valorNoMes(_selectedMonth.year, _selectedMonth.month));
 
   List<Transacao> _applySearch(List<Transacao> list) {
     var result = list;
@@ -118,14 +124,18 @@ class _TransactionsScreenState extends State<TransactionsScreen>
         result.sort((a, b) => b.primeiraParcela.compareTo(a.primeiraParcela));
         break;
       case _OrdemTransacao.maiorValor:
-        result.sort((a, b) => b.valorNoMes(_selectedMonth.year, _selectedMonth.month)
+        result.sort((a, b) => b
+            .valorNoMes(_selectedMonth.year, _selectedMonth.month)
             .abs()
-            .compareTo(a.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs()));
+            .compareTo(
+                a.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs()));
         break;
       case _OrdemTransacao.menorValor:
-        result.sort((a, b) => a.valorNoMes(_selectedMonth.year, _selectedMonth.month)
+        result.sort((a, b) => a
+            .valorNoMes(_selectedMonth.year, _selectedMonth.month)
             .abs()
-            .compareTo(b.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs()));
+            .compareTo(
+                b.valorNoMes(_selectedMonth.year, _selectedMonth.month).abs()));
         break;
       case _OrdemTransacao.categoria:
         result.sort((a, b) => a.categoria.compareTo(b.categoria));
@@ -136,7 +146,9 @@ class _TransactionsScreenState extends State<TransactionsScreen>
   }
 
   bool get _hasActiveFilters =>
-      _filtroContaId != null || _filtroCategoriaId != null || _ordem != _OrdemTransacao.data;
+      _filtroContaId != null ||
+      _filtroCategoriaId != null ||
+      _ordem != _OrdemTransacao.data;
 
   void _clearFilters() {
     setState(() {
@@ -188,14 +200,16 @@ class _TransactionsScreenState extends State<TransactionsScreen>
                       _clearFilters();
                       Navigator.pop(context);
                     },
-                    child: const Text('Limpar', style: TextStyle(color: AppColors.amber)),
+                    child: const Text('Limpar',
+                        style: TextStyle(color: AppColors.amber)),
                   ),
                 ],
               ),
               const SizedBox(height: 20),
 
               // Conta
-              Text('Conta', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+              Text('Conta',
+                  style: TextStyle(color: context.textSecondary, fontSize: 13)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -204,13 +218,15 @@ class _TransactionsScreenState extends State<TransactionsScreen>
                   _FilterChip(
                     label: 'Todas',
                     selected: _filtroContaId == null,
-                    onTap: () => setModal(() => setState(() => _filtroContaId = null)),
+                    onTap: () =>
+                        setModal(() => setState(() => _filtroContaId = null)),
                     color: context.primary,
                   ),
                   ..._contas.map((c) => _FilterChip(
                         label: c.nome,
                         selected: _filtroContaId == c.id,
-                        onTap: () => setModal(() => setState(() => _filtroContaId = c.id)),
+                        onTap: () => setModal(
+                            () => setState(() => _filtroContaId = c.id)),
                         color: context.primary,
                       )),
                 ],
@@ -218,7 +234,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
               const SizedBox(height: 20),
 
               // Categoria
-              Text('Categoria', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+              Text('Categoria',
+                  style: TextStyle(color: context.textSecondary, fontSize: 13)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -227,7 +244,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
                   _FilterChip(
                     label: 'Todas',
                     selected: _filtroCategoriaId == null,
-                    onTap: () => setModal(() => setState(() => _filtroCategoriaId = null)),
+                    onTap: () => setModal(
+                        () => setState(() => _filtroCategoriaId = null)),
                     color: context.primary,
                   ),
                   ...cats.map((cat) {
@@ -245,17 +263,21 @@ class _TransactionsScreenState extends State<TransactionsScreen>
               const SizedBox(height: 20),
 
               // Ordenação
-              Text('Ordenar por', style: TextStyle(color: context.textSecondary, fontSize: 13)),
+              Text('Ordenar por',
+                  style: TextStyle(color: context.textSecondary, fontSize: 13)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
-                children: _OrdemTransacao.values.map((o) => _FilterChip(
-                      label: o.label,
-                      selected: _ordem == o,
-                      onTap: () => setModal(() => setState(() => _ordem = o)),
-                      color: AppColors.blue,
-                    )).toList(),
+                children: _OrdemTransacao.values
+                    .map((o) => _FilterChip(
+                          label: o.label,
+                          selected: _ordem == o,
+                          onTap: () =>
+                              setModal(() => setState(() => _ordem = o)),
+                          color: AppColors.blue,
+                        ))
+                    .toList(),
               ),
               const SizedBox(height: 20),
 
@@ -269,7 +291,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
                     shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text('Aplicar', style: TextStyle(fontWeight: FontWeight.w700)),
+                  child: const Text('Aplicar',
+                      style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ),
             ],
@@ -331,36 +354,45 @@ class _TransactionsScreenState extends State<TransactionsScreen>
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: context.appSurface,
+      titleSpacing: 0,
       title: _showSearch
-          ? TextField(
-              autofocus: true,
-              style: TextStyle(color: context.textPrimary),
-              decoration: InputDecoration(
-                hintText: 'Buscar transações...',
-                hintStyle: TextStyle(color: context.textSecondary),
-                border: InputBorder.none,
-                filled: false,
-              ),
-              onChanged: (v) => setState(() => _searchQuery = v),
-            )
-          : Row(
-              children: [
-                const Text('Transações',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                SizedBox(width: 12),
-                MonthSelectorPill(
-                  selectedMonth: _selectedMonth,
-                  onPrev: _prevMonth,
-                  onNext: _nextMonth,
+          ? Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: TextField(
+                autofocus: true,
+                style: TextStyle(color: context.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'Buscar transações...',
+                  hintStyle: TextStyle(color: context.textSecondary),
+                  border: InputBorder.none,
+                  filled: false,
                 ),
-              ],
+                onChanged: (v) => setState(() => _searchQuery = v),
+              ),
+            )
+          : Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: Text('Transações',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: context.textPrimary)),
             ),
       actions: [
+        if (!_showSearch)
+          MonthSelectorPill(
+            selectedMonth: _selectedMonth,
+            onPrev: _prevMonth,
+            onNext: _nextMonth,
+          ),
+        if (!_showSearch) const SizedBox(width: 4),
         if (_hasActiveFilters)
           IconButton(
             icon: const Icon(Icons.filter_alt_off, color: AppColors.amber),
             tooltip: 'Limpar filtros',
             onPressed: _clearFilters,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            padding: EdgeInsets.zero,
           ),
         IconButton(
           icon: Icon(
@@ -369,6 +401,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
           ),
           tooltip: 'Filtros',
           onPressed: () => _showFilterSheet(),
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          padding: EdgeInsets.zero,
         ),
         IconButton(
           icon: Icon(
@@ -379,7 +413,10 @@ class _TransactionsScreenState extends State<TransactionsScreen>
             _showSearch = !_showSearch;
             if (!_showSearch) _searchQuery = '';
           }),
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          padding: EdgeInsets.zero,
         ),
+        const SizedBox(width: 4),
       ],
       bottom: TabBar(
         controller: _tabController,
@@ -437,7 +474,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
             ? () async {
                 await Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const AddTransactionScreen()),
+                  MaterialPageRoute(
+                      builder: (_) => const AddTransactionScreen()),
                 );
                 AppState.notify();
               }
@@ -457,13 +495,17 @@ class _TransactionsScreenState extends State<TransactionsScreen>
       color: context.primary,
       backgroundColor: context.appSurface,
       child: ListView.builder(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
         itemCount: grouped.length,
         itemBuilder: (_, i) {
           final date = grouped.keys.elementAt(i);
           final txList = grouped[date]!;
-          return _DateGroup(date: date, transactions: txList, onDelete: _deleteTransaction,
-              ano: _selectedMonth.year, mes: _selectedMonth.month);
+          return _DateGroup(
+              date: date,
+              transactions: txList,
+              onDelete: _deleteTransaction,
+              ano: _selectedMonth.year,
+              mes: _selectedMonth.month);
         },
       ),
     );
@@ -474,7 +516,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: context.appSurface,
-        title: Text('Excluir transação', style: TextStyle(color: context.textPrimary)),
+        title: Text('Excluir transação',
+            style: TextStyle(color: context.textPrimary)),
         content: t.isRecorrente
             ? Text(
                 'Esta é uma transação recorrente. Deseja excluir apenas este mês ou todos os futuros?',
@@ -485,8 +528,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
             ? [
                 TextButton(
                   onPressed: () => Navigator.pop(context, false),
-                  child:
-                      Text('Cancelar', style: TextStyle(color: context.textSecondary)),
+                  child: Text('Cancelar',
+                      style: TextStyle(color: context.textSecondary)),
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(context, true),
@@ -495,7 +538,7 @@ class _TransactionsScreenState extends State<TransactionsScreen>
                 ),
                 TextButton(
                   onPressed: () async {
-                    await AppDB.deleteTransacao(t.id);
+                    await _transactionRepository.delete(t.id);
                     Navigator.pop(context, false);
                     AppState.notify();
                   },
@@ -505,12 +548,13 @@ class _TransactionsScreenState extends State<TransactionsScreen>
             : [
                 TextButton(
                   onPressed: () => Navigator.pop(context, false),
-                  child:
-                      Text('Cancelar', style: TextStyle(color: context.textSecondary)),
+                  child: Text('Cancelar',
+                      style: TextStyle(color: context.textSecondary)),
                 ),
                 TextButton(
                   onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Excluir', style: TextStyle(color: AppColors.red)),
+                  child: const Text('Excluir',
+                      style: TextStyle(color: AppColors.red)),
                 ),
               ],
       ),
@@ -518,10 +562,10 @@ class _TransactionsScreenState extends State<TransactionsScreen>
 
     if (confirm == true) {
       if (t.isRecorrente) {
-        await AppDB.deleteTransacaoMes(
+        await _transactionRepository.deleteMonthOccurrence(
             t.id, _selectedMonth.year, _selectedMonth.month);
       } else {
-        await AppDB.deleteTransacao(t.id);
+        await _transactionRepository.delete(t.id);
       }
       AppState.notify();
     }
@@ -554,7 +598,9 @@ class _TotalBanner extends StatelessWidget {
               Text(
                 fmtBRL(value),
                 style: TextStyle(
-                    fontSize: 26, fontWeight: FontWeight.w800, color: context.textPrimary),
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    color: context.textPrimary),
               ),
             ],
           ),
@@ -587,8 +633,11 @@ class _DateGroup extends StatelessWidget {
   final int mes;
 
   const _DateGroup(
-      {required this.date, required this.transactions, required this.onDelete,
-       required this.ano, required this.mes});
+      {required this.date,
+      required this.transactions,
+      required this.onDelete,
+      required this.ano,
+      required this.mes});
 
   @override
   Widget build(BuildContext context) {
@@ -605,7 +654,9 @@ class _DateGroup extends StatelessWidget {
             children: [
               Text(date,
                   style: TextStyle(
-                      fontSize: 12, color: context.textSecondary, fontWeight: FontWeight.w600)),
+                      fontSize: 12,
+                      color: context.textSecondary,
+                      fontWeight: FontWeight.w600)),
               Text(
                 '${dayTotal >= 0 ? '+' : ''}${fmtBRL(dayTotal)}',
                 style: TextStyle(
@@ -628,7 +679,11 @@ class _DateGroup extends StatelessWidget {
               final isLast = e.key == transactions.length - 1;
               return Column(
                 children: [
-                  _TransactionCard(transacao: t, onDelete: () => onDelete(t), ano: ano, mes: mes),
+                  _TransactionCard(
+                      transacao: t,
+                      onDelete: () => onDelete(t),
+                      ano: ano,
+                      mes: mes),
                   if (!isLast)
                     const Divider(height: 1, indent: 72, endIndent: 16),
                 ],
@@ -646,8 +701,11 @@ class _TransactionCard extends StatelessWidget {
   final VoidCallback onDelete;
   final int ano;
   final int mes;
-  _TransactionCard({required this.transacao, required this.onDelete,
-      required this.ano, required this.mes});
+  _TransactionCard(
+      {required this.transacao,
+      required this.onDelete,
+      required this.ano,
+      required this.mes});
 
   @override
   Widget build(BuildContext context) {
@@ -703,8 +761,8 @@ class _TransactionCard extends StatelessWidget {
                           color: AppColors.blue,
                           shape: BoxShape.circle,
                         ),
-                        child:
-                            const Icon(Icons.refresh, color: Colors.white, size: 8),
+                        child: const Icon(Icons.refresh,
+                            color: Colors.white, size: 8),
                       ),
                     ),
                 ],
@@ -780,9 +838,7 @@ class _TransactionCard extends StatelessWidget {
             Text(
               '${isDespesa ? '-' : '+'}${fmtBRL(transacao.valorNoMes(ano, mes).abs())}',
               style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  color: valColor),
+                  fontSize: 14, fontWeight: FontWeight.w700, color: valColor),
             ),
           ],
         ),
@@ -792,10 +848,14 @@ class _TransactionCard extends StatelessWidget {
 
   String _recLabel(Recorrencia r) {
     switch (r) {
-      case Recorrencia.mensal: return 'Mensal';
-      case Recorrencia.semanal: return 'Semanal';
-      case Recorrencia.anual: return 'Anual';
-      default: return '';
+      case Recorrencia.mensal:
+        return 'Mensal';
+      case Recorrencia.semanal:
+        return 'Semanal';
+      case Recorrencia.anual:
+        return 'Anual';
+      default:
+        return '';
     }
   }
 }

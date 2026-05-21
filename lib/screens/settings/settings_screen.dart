@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import '../../services/notification_service.dart';
 import '../../data/db/app_db.dart';
+import '../../repositories/category_repository.dart';
+import '../../repositories/settings_repository.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
 import '../../widgets/common.dart';
@@ -23,6 +25,7 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  static const _settingsRepository = SettingsRepository.instance;
   String _nome = 'Usuário';
   bool _notificacoes = true;
   int _diasAviso = 3;
@@ -33,11 +36,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   void initState() {
     super.initState();
+    AppState.instance.addListener(_onUiChanged);
     _load();
   }
 
+  @override
+  void dispose() {
+    AppState.instance.removeListener(_onUiChanged);
+    super.dispose();
+  }
+
+  void _onUiChanged() {
+    if (mounted) setState(() {});
+  }
+
   Future<void> _load() async {
-    final config = await AppDB.getConfig();
+    final config = await _settingsRepository.getConfig();
     setState(() {
       _nome = config['nome_usuario'] ?? 'Usuário';
       _notificacoes = config['notificacoes_ativas'] != 'false';
@@ -163,7 +177,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           value: _notificacoes,
           onChanged: (v) async {
             setState(() => _notificacoes = v);
-            await AppDB.setConfig('notificacoes_ativas', v.toString());
+            await _settingsRepository.setConfig(
+                'notificacoes_ativas', v.toString());
             await _reagendarNotificacoes();
           },
         ),
@@ -179,7 +194,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             max: 7,
             onChanged: (v) async {
               setState(() => _diasAviso = v.round());
-              await AppDB.setConfig(
+              await _settingsRepository.setConfig(
                   'dias_aviso_antecipado', v.round().toString());
               await _reagendarNotificacoes();
             },
@@ -196,7 +211,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             max: 100,
             onChanged: (v) async {
               setState(() => _orcamentoAlertaPercentual = v.round());
-              await AppDB.setConfig(
+              await _settingsRepository.setConfig(
                 NotificationService.budgetAlertPercentConfigKey,
                 v.round().toString(),
               );
@@ -285,7 +300,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.delete_outline,
           iconColor: AppColors.red,
           label: 'Limpar dados',
-          subtitle: 'Remover todas as transações',
+          subtitle: 'Remover todas as transações e recorrências',
           onTap: _confirmarLimpeza,
         ),
       ],
@@ -299,17 +314,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.info_outline,
           iconColor: context.textSecondary,
           label: 'Versão do app',
-          subtitle: 'v2.1.0 — Flutter / SQLite',
+          subtitle: 'v2.2.0 — Flutter / SQLite',
           onTap: null,
           showChevron: false,
-        ),
-        const Divider(height: 1),
-        _NavTile(
-          icon: Icons.star_outline_rounded,
-          iconColor: AppColors.amber,
-          label: 'Avaliar o app',
-          subtitle: 'Ajude com uma avaliação na loja',
-          onTap: () => _showSnack('Obrigado pelo interesse!'),
         ),
       ],
     );
@@ -374,7 +381,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
     if (ok == true) {
-      _showSnack('Dados limpos com sucesso');
+      await _SettingsScreenState._settingsRepository.clearTransactionsData();
+      await NotificationService.syncFromDatabase();
+      AppState.notify();
+      _showSnack('Dados limpos com sucesso.');
     }
   }
 
@@ -404,7 +414,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'banco',
           'parcelas',
           'primeira_parcela',
-          'recorrencia'
+          'recorrencia',
+          'recorrencia_data_base'
         ],
         ...transacoes.map((t) => [
               t.id,
@@ -416,17 +427,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
               t.parcelas,
               t.primeiraParcela.toIso8601String(),
               t.recorrencia.index,
+              t.recorrenciaDataBase?.toIso8601String() ?? '',
             ]),
       ];
       final csv = const ListToCsvConverter().convert(rows);
       final dir = await getTemporaryDirectory();
       final now = DateTime.now();
       final filename =
-          'financeapp_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.csv';
+          'Uffa_${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}.csv';
       final file = File('${dir.path}/$filename');
       await file.writeAsString(csv);
-      await Share.shareXFiles([XFile(file.path)],
-          text: 'Transações FinanceApp');
+      await Share.shareXFiles([XFile(file.path)], text: 'Transações Uffa');
     } catch (e) {
       _showSnack('Erro ao exportar: $e');
     }
@@ -470,6 +481,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           final parcelas = int.tryParse(row[6].toString()) ?? 1;
           final primeiraParcela = DateTime.parse(row[7].toString());
           final recorrenciaIdx = int.tryParse(row[8].toString()) ?? 0;
+          final recorrenciaDataBase =
+              row.length > 9 && row[9].toString().trim().isNotEmpty
+                  ? DateTime.tryParse(row[9].toString())
+                  : null;
 
           // Map tipo string → index
           final tipoMap = {
@@ -493,6 +508,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'parcelas': parcelas,
               'primeira_parcela': primeiraParcela.toIso8601String(),
               'recorrencia': recorrenciaIdx,
+              'recorrencia_data_base': recorrenciaDataBase?.toIso8601String(),
             },
             conflictAlgorithm: ConflictAlgorithm.ignore,
           );
@@ -527,7 +543,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!authenticated) return;
     }
     setState(() => _biometricoAtivo = value);
-    await AppDB.setConfig('biometrico_ativo', value.toString());
+    await _SettingsScreenState._settingsRepository
+        .setConfig('biometrico_ativo', value.toString());
     _showSnack(value
         ? 'Bloqueio biométrico ativado.'
         : 'Bloqueio biométrico desativado.');
@@ -535,8 +552,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   void _showSnack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg),
-      backgroundColor: context.appSurface,
+      content: Text(msg, style: const TextStyle(color: Colors.white)),
+      backgroundColor: context.textPrimary,
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
@@ -832,7 +849,8 @@ class _EditNomeSheetState extends State<_EditNomeSheet> {
             onPressed: () async {
               final novo = _ctrl.text.trim();
               if (novo.isNotEmpty) {
-                await AppDB.setConfig('nome_usuario', novo);
+                await _SettingsScreenState._settingsRepository
+                    .setConfig('nome_usuario', novo);
                 AppState.notify();
               }
               if (mounted) Navigator.pop(context);
@@ -879,7 +897,7 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
   }
 
   Future<void> _loadConfig() async {
-    final config = await AppDB.getConfig();
+    final config = await _SettingsScreenState._settingsRepository.getConfig();
     final valor = config['receita_base'] ?? '';
     final diaFixo = config['receita_base_dia_fixo'] ?? '';
     final diaUtil = config['receita_base_dia_util'] ?? '';
@@ -904,7 +922,7 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
     final valor = double.tryParse(raw);
     if (valor == null || valor <= 0) return;
 
-    await AppDB.salvarRendaBase(
+    await _SettingsScreenState._settingsRepository.saveIncomeBase(
       valor: valor,
       diaFixo: _modoData == 'fixo' ? _diaFixo : null,
       nthDiaUtil: _modoData == 'util' ? _nthUtil : null,
@@ -920,7 +938,7 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
         backgroundColor: context.appSurface,
         title: Text('Remover renda base',
             style: TextStyle(color: context.textPrimary)),
-        content: Text('Isso removerá a conta Salário e a transação recorrente.',
+        content: Text('Isso removerá a conta Saldo e a transação recorrente.',
             style: TextStyle(color: context.textSecondary)),
         actions: [
           TextButton(
@@ -937,7 +955,7 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
       ),
     );
     if (ok == true) {
-      await AppDB.removerRendaBase();
+      await _SettingsScreenState._settingsRepository.removeIncomeBase();
       AppState.notify();
       if (mounted) Navigator.pop(context);
     }
@@ -981,7 +999,7 @@ class _RendaBaseSheetState extends State<_RendaBaseSheet> {
                           fontWeight: FontWeight.w700)),
                   const SizedBox(height: 6),
                   Text(
-                    'Cria uma conta "Salário" e uma entrada recorrente mensal. '
+                    'Cria uma conta "Saldo" e uma entrada recorrente mensal. '
                     'Você pode adicionar ou remover valores diretamente pela tela de transações.',
                     style:
                         TextStyle(color: context.textSecondary, fontSize: 12),
@@ -1213,6 +1231,7 @@ class _CategoriasSheet extends StatefulWidget {
 }
 
 class _CategoriasSheetState extends State<_CategoriasSheet> {
+  static const _categoryRepository = CategoryRepository.instance;
   List<Map<String, dynamic>> _categorias = [];
   bool _loading = true;
 
@@ -1223,7 +1242,7 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
   }
 
   Future<void> _load() async {
-    final rows = await AppDB.getCategorias();
+    final rows = await _categoryRepository.getAll();
     if (mounted) {
       setState(() {
         _categorias = rows;
@@ -1282,7 +1301,7 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
       ),
     );
     if (ok == true) {
-      await AppDB.deleteCategoria(cat['id'] as String);
+      await _categoryRepository.delete(cat['id'] as String);
       await _load();
       AppState.notify();
     }
@@ -1354,7 +1373,7 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
                           list.insert(newIdx, item);
                           setState(() => _categorias = list);
                           for (int i = 0; i < list.length; i++) {
-                            await AppDB.updateCategoriaOrdem(
+                            await _categoryRepository.updateOrder(
                                 list[i]['id'] as String, i);
                           }
                         },
@@ -1479,6 +1498,7 @@ class _CategoriaFormSheet extends StatefulWidget {
 }
 
 class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
+  static const _categoryRepository = CategoryRepository.instance;
   late final TextEditingController _nomeCtrl;
   late String _icone;
   late String _cor;
@@ -1528,7 +1548,7 @@ class _CategoriaFormSheetState extends State<_CategoriaFormSheet> {
         : 'cat_custom_${const Uuid().v4()}';
     final ordem =
         _isEdit ? (widget.categoriaExistente!['ordem'] as int? ?? 99) : 99;
-    await AppDB.upsertCategoria({
+    await _categoryRepository.save({
       'id': id,
       'nome': nome,
       'icone': _icone,
@@ -2033,7 +2053,7 @@ class _ThemePreviewCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('FinanceApp',
+                  Text('Uffa',
                       style: TextStyle(
                           color: textP,
                           fontSize: 13,

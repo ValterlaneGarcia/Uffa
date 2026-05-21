@@ -1,6 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import '../data/db/app_db.dart';
+import '../repositories/settings_repository.dart';
 
 // ─── Preset de tema nomeado ────────────────────────────────────────────────
 // Cada preset agrupa: nome, cor primária (hex sem alpha) e modo claro/escuro.
@@ -8,7 +7,7 @@ import '../data/db/app_db.dart';
 
 class AppThemePreset {
   final String name;
-  final String hex;        // cor primária sem alpha, ex: '16A34A'
+  final String hex; // cor primária sem alpha, ex: '16A34A'
   final ThemeMode mode;
   final IconData icon;
 
@@ -19,7 +18,7 @@ class AppThemePreset {
     required this.icon,
   });
 
-  Color get color => Color(int.parse('FF$hex', radix: 16));
+  Color get color => _colorFromHex(hex, AppThemePreset.defaultPreset.hex);
 
   static const defaultPreset = AppThemePreset(
     name: 'Padrão',
@@ -79,6 +78,8 @@ class AppThemePreset {
 class AppState extends ChangeNotifier {
   AppState._();
   static final AppState instance = AppState._();
+  static const _settingsRepository = SettingsRepository.instance;
+  final ChangeNotifier _dataNotifier = ChangeNotifier();
 
   // ── Theme ─────────────────────────────────────────────────────
   ThemeMode _themeMode = ThemeMode.light;
@@ -87,7 +88,8 @@ class AppState extends ChangeNotifier {
   // ── Primary color (hex sem alpha, ex: '16A34A') ───────────────
   String _primaryColorHex = AppThemePreset.defaultPreset.hex;
   String get primaryColorHex => _primaryColorHex;
-  Color get primaryColor => Color(int.parse('FF$_primaryColorHex', radix: 16));
+  Color get primaryColor =>
+      _colorFromHex(_primaryColorHex, AppThemePreset.defaultPreset.hex);
 
   // ── Balance visibility (global, persisted) ────────────────────
   bool _balanceVisible = true;
@@ -104,17 +106,20 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  static void notify() => instance.notifyListeners();
+  static ChangeNotifier get dataChanges => instance._dataNotifier;
+  static void notifyDataChanged() => instance._dataNotifier.notifyListeners();
+  static void notify() => notifyDataChanged();
 
   static Future<void> loadPreferences() async {
-    final config = await AppDB.getConfig();
+    final config = await _settingsRepository.getConfig();
 
     final darkMode = config['tema_escuro'] == 'true';
     instance._themeMode = darkMode ? ThemeMode.dark : ThemeMode.light;
 
     final colorHex = config['cor_primaria'];
     if (colorHex != null && colorHex.isNotEmpty) {
-      instance._primaryColorHex = colorHex;
+      instance._primaryColorHex =
+          _sanitizeHex(colorHex, AppThemePreset.defaultPreset.hex);
     }
 
     final balanceHidden = config['saldos_ocultos'] == 'true';
@@ -123,13 +128,15 @@ class AppState extends ChangeNotifier {
 
   Future<void> setThemeMode(ThemeMode mode) async {
     _themeMode = mode;
-    await AppDB.setConfig('tema_escuro', (mode == ThemeMode.dark).toString());
+    await _settingsRepository.setConfig(
+        'tema_escuro', (mode == ThemeMode.dark).toString());
     notifyListeners();
   }
 
   Future<void> setPrimaryColor(String hexWithoutAlpha) async {
-    _primaryColorHex = hexWithoutAlpha;
-    await AppDB.setConfig('cor_primaria', hexWithoutAlpha);
+    _primaryColorHex =
+        _sanitizeHex(hexWithoutAlpha, AppThemePreset.defaultPreset.hex);
+    await _settingsRepository.setConfig('cor_primaria', _primaryColorHex);
     notifyListeners();
   }
 
@@ -137,8 +144,8 @@ class AppState extends ChangeNotifier {
   Future<void> applyPreset(AppThemePreset preset) async {
     _primaryColorHex = preset.hex;
     _themeMode = preset.mode;
-    await AppDB.setConfig('cor_primaria', preset.hex);
-    await AppDB.setConfig(
+    await _settingsRepository.setConfig('cor_primaria', preset.hex);
+    await _settingsRepository.setConfig(
         'tema_escuro', (preset.mode == ThemeMode.dark).toString());
     notifyListeners();
   }
@@ -148,7 +155,22 @@ class AppState extends ChangeNotifier {
 
   Future<void> toggleBalanceVisibility() async {
     _balanceVisible = !_balanceVisible;
-    await AppDB.setConfig('saldos_ocultos', (!_balanceVisible).toString());
+    await _settingsRepository.setConfig(
+        'saldos_ocultos', (!_balanceVisible).toString());
     notifyListeners();
   }
+}
+
+String _sanitizeHex(String value, String fallback) {
+  final normalized = value.trim().replaceFirst(RegExp(r'^#'), '').toUpperCase();
+  final withoutAlpha =
+      normalized.length == 8 ? normalized.substring(2) : normalized;
+  return RegExp(r'^[0-9A-F]{6}$').hasMatch(withoutAlpha)
+      ? withoutAlpha
+      : fallback;
+}
+
+Color _colorFromHex(String value, String fallback) {
+  final hex = _sanitizeHex(value, fallback);
+  return Color(int.parse('FF$hex', radix: 16));
 }

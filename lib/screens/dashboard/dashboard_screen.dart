@@ -11,11 +11,22 @@ import '../../widgets/common.dart';
 import '../transactions/add_transaction_screen.dart';
 import '../transactions/transactions_screen.dart';
 import '../accounts/accounts_screen.dart';
+import '../settings/settings_screen.dart';
 
 // Lista de meses abreviados para gráficos (constante global)
 const _mesesAbreviados = [
-  'J', 'F', 'M', 'A', 'M', 'J',
-  'J', 'A', 'S', 'O', 'N', 'D'
+  'J',
+  'F',
+  'M',
+  'A',
+  'M',
+  'J',
+  'J',
+  'A',
+  'S',
+  'O',
+  'N',
+  'D'
 ];
 
 class DashboardScreen extends StatefulWidget {
@@ -38,38 +49,33 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void initState() {
     super.initState();
     _loadData();
-    AppState.instance.addListener(_loadData);
+    AppState.dataChanges.addListener(_loadData);
+    AppState.instance.addListener(_onUiChanged);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_loadData);
+    AppState.dataChanges.removeListener(_loadData);
+    AppState.instance.removeListener(_onUiChanged);
     super.dispose();
+  }
+
+  void _onUiChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    final summary = await FinanceService.getMonthlySummary(
-        _selectedMonth.year, _selectedMonth.month);
-    final yearly =
-        await FinanceService.getYearlyComparison(_selectedMonth.year);
-    // Recarrega contas para refletir saldos atualizados
-    final contas = await AppDB.getContas();
-    // Transações recentes: filtra pelo mês selecionado para manter consistência
-    final recentes = await AppDB.getTransacoesQueImpactamMes(
-        _selectedMonth.year, _selectedMonth.month);
-    final nome = await AppDB.getConfigValue('nome_usuario') ?? 'Usuário';
+    final data = await FinanceService.loadDashboardData(_selectedMonth);
 
     if (!mounted) return;
     setState(() {
-      _summary = summary;
-      _yearly = yearly;
-      _contas = contas;
-      // Ordena por data decrescente e pega as 5 mais recentes
-      recentes.sort((a, b) => b.primeiraParcela.compareTo(a.primeiraParcela));
-      _recentes = recentes.take(5).toList();
-      _nomeUsuario = nome;
+      _summary = data.summary;
+      _yearly = data.yearly;
+      _contas = data.contas;
+      _recentes = data.recentes;
+      _nomeUsuario = data.nomeUsuario;
       _loading = false;
     });
   }
@@ -82,8 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _nextMonth() {
     final now = DateTime.now();
-    final next =
-        DateTime(_selectedMonth.year, _selectedMonth.month + 1);
+    final next = DateTime(_selectedMonth.year, _selectedMonth.month + 1);
     if (!next.isAfter(DateTime(now.year, now.month + 2))) {
       setState(() => _selectedMonth = next);
       _loadData();
@@ -137,14 +142,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildHeader() {
     final summary = _summary;
-    // Patrimônio líquido: soma saldos das contas normais, subtrai dívidas dos cartões
-    final saldo = _contas.fold<double>(
-      0,
-      (s, c) => c.tipo == 'credito' ? s - c.saldo : s + c.saldo,
-    );
+    final contaSaldo =
+        _contas.where((c) => c.id == AppDB.balanceAccountId).firstOrNull;
+    final saldo = contaSaldo?.saldo ??
+        _contas
+            .where((c) => c.tipo != 'credito')
+            .fold<double>(0, (s, c) => s + c.saldo);
     return Container(
       decoration: BoxDecoration(
-        gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [context.primary, context.primary.withOpacity(0.8)]),
+        gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [context.primary, context.primary.withOpacity(0.8)]),
       ),
       child: SafeArea(
         bottom: false,
@@ -183,7 +192,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(width: 8),
                       GestureDetector(
-                        onTap: () => _loadData(),
+                        onTap: _showUserMenu,
                         child: Container(
                           width: 40,
                           height: 40,
@@ -219,11 +228,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       children: [
                         const Text(
                           'Carteira total',
-                          style: TextStyle(
-                              color: Colors.white70, fontSize: 13),
+                          style: TextStyle(color: Colors.white70, fontSize: 13),
                         ),
                         GestureDetector(
-                          onTap: () => AppState.instance.toggleBalanceVisibility(),
+                          onTap: () =>
+                              AppState.instance.toggleBalanceVisibility(),
                           child: Row(
                             children: [
                               Icon(
@@ -240,7 +249,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      AppState.instance.balanceVisible ? fmtBRL(saldo) : 'R\$ ••••••',
+                      AppState.instance.balanceVisible
+                          ? fmtBRL(saldo)
+                          : 'R\$ ••••••',
                       style: TextStyle(
                         fontSize: 34,
                         fontWeight: FontWeight.w800,
@@ -251,25 +262,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     const SizedBox(height: 4),
                     Text(
                       'Saldo disponível',
-                      style: TextStyle(
-                          color: Colors.white60, fontSize: 12),
+                      style: TextStyle(color: Colors.white60, fontSize: 12),
                     ),
                     const SizedBox(height: 16),
 
                     // Month selector
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        _WhiteMonthPill(
-                          selectedMonth: _selectedMonth,
-                          onPrev: _prevMonth,
-                          onNext: _nextMonth,
-                        ),
-                        if (summary != null)
-                          _TrendBadge(
-                              value: summary.variacaoReceitas,
-                              positive: summary.saldo >= 0),
-                      ],
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final compact = constraints.maxWidth < 340;
+                        if (compact) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _WhiteMonthPill(
+                                selectedMonth: _selectedMonth,
+                                onPrev: _prevMonth,
+                                onNext: _nextMonth,
+                              ),
+                              if (summary != null) ...[
+                                const SizedBox(height: 10),
+                                _TrendBadge(
+                                  value: summary.variacaoReceitas,
+                                  positive: summary.saldo >= 0,
+                                ),
+                              ],
+                            ],
+                          );
+                        }
+                        return Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Flexible(
+                              child: _WhiteMonthPill(
+                                selectedMonth: _selectedMonth,
+                                onPrev: _prevMonth,
+                                onNext: _nextMonth,
+                              ),
+                            ),
+                            if (summary != null) ...[
+                              const SizedBox(width: 8),
+                              _TrendBadge(
+                                value: summary.variacaoReceitas,
+                                positive: summary.saldo >= 0,
+                              ),
+                            ],
+                          ],
+                        );
+                      },
                     ),
                   ],
                 ),
@@ -289,15 +328,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: _SummaryCard(
             label: 'Receitas',
             value: summary?.receitas ?? 0,
-            percent: summary?.variacaoReceitas ?? 0,
             color: context.primary,
             bgColor: context.primaryLight,
             icon: Icons.arrow_upward_rounded,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) =>
-                      const TransactionsScreen(initialTab: 2)),
+                  builder: (_) => const TransactionsScreen(initialTab: 2)),
             ),
           ),
         ),
@@ -306,15 +343,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           child: _SummaryCard(
             label: 'Despesas',
             value: summary?.despesas ?? 0,
-            percent: summary?.variacaoDespesas ?? 0,
             color: AppColors.red,
             bgColor: AppColors.redLight,
             icon: Icons.arrow_downward_rounded,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) =>
-                      const TransactionsScreen(initialTab: 1)),
+                  builder: (_) => const TransactionsScreen(initialTab: 1)),
             ),
           ),
         ),
@@ -323,8 +358,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildMonthlyChart() {
-    final hasData = _yearly.any(
-        (e) => (e['receitas'] ?? 0) > 0 || (e['despesas'] ?? 0) > 0);
+    final hasData = _yearly
+        .any((e) => (e['receitas'] ?? 0) > 0 || (e['despesas'] ?? 0) > 0);
     final maxVal = _yearly.fold<double>(
         0,
         (m, e) => [m, e['receitas'] ?? 0, e['despesas'] ?? 0]
@@ -341,8 +376,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: EmptyState(
                 icon: Icons.bar_chart_outlined,
                 title: 'Nenhum dado ainda',
-                subtitle:
-                    'Adicione transações para ver o resumo',
+                subtitle: 'Adicione transações para ver o resumo',
                 accentColor: AppColors.blue,
               ),
             )
@@ -350,11 +384,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             SizedBox(height: 6),
             Row(
               children: [
-                _LegendDot(
-                    color: context.primary, label: 'Receitas'),
+                _LegendDot(color: context.primary, label: 'Receitas'),
                 const SizedBox(width: 16),
-                _LegendDot(
-                    color: AppColors.red, label: 'Despesas'),
+                _LegendDot(color: AppColors.red, label: 'Despesas'),
               ],
             ),
             const SizedBox(height: 20),
@@ -374,14 +406,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   borderData: FlBorderData(show: false),
                   titlesData: FlTitlesData(
                     leftTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     rightTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     topTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
@@ -390,38 +419,28 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                     ),
                   ),
-                  barGroups:
-                      List.generate(_yearly.length, (i) {
-                    final isCurrent =
-                        i == _selectedMonth.month - 1;
-                    return BarChartGroupData(
-                        x: i,
-                        barRods: [
-                          BarChartRodData(
-                            toY:
-                                _yearly[i]['receitas'] ?? 0,
-                            color: isCurrent
-                                ? context.primary
-                                : context.primary
-                                    .withOpacity(0.3),
-                            width: 6,
-                            borderRadius:
-                                const BorderRadius.vertical(
-                                    top: Radius.circular(4)),
-                          ),
-                          BarChartRodData(
-                            toY:
-                                _yearly[i]['despesas'] ?? 0,
-                            color: isCurrent
-                                ? AppColors.red
-                                : AppColors.red
-                                    .withOpacity(0.3),
-                            width: 6,
-                            borderRadius:
-                                const BorderRadius.vertical(
-                                    top: Radius.circular(4)),
-                          ),
-                        ]);
+                  barGroups: List.generate(_yearly.length, (i) {
+                    final isCurrent = i == _selectedMonth.month - 1;
+                    return BarChartGroupData(x: i, barRods: [
+                      BarChartRodData(
+                        toY: _yearly[i]['receitas'] ?? 0,
+                        color: isCurrent
+                            ? context.primary
+                            : context.primary.withOpacity(0.3),
+                        width: 6,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(4)),
+                      ),
+                      BarChartRodData(
+                        toY: _yearly[i]['despesas'] ?? 0,
+                        color: isCurrent
+                            ? AppColors.red
+                            : AppColors.red.withOpacity(0.3),
+                        width: 6,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(4)),
+                      ),
+                    ]);
                   }),
                 ),
               ),
@@ -454,8 +473,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             action: 'Adicionar',
             onAction: () => Navigator.push(
               context,
-              MaterialPageRoute(
-                  builder: (_) => const AccountsScreen()),
+              MaterialPageRoute(builder: (_) => const AccountsScreen()),
             ),
           ),
           const SizedBox(height: 12),
@@ -479,8 +497,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           action: 'Ver todas',
           onAction: () => Navigator.push(
             context,
-            MaterialPageRoute(
-                builder: (_) => const AccountsScreen()),
+            MaterialPageRoute(builder: (_) => const AccountsScreen()),
           ),
         ),
         const SizedBox(height: 12),
@@ -492,8 +509,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 onTap: () async {
                   await Navigator.push(
                     context,
-                    MaterialPageRoute(
-                        builder: (_) => const AccountsScreen()),
+                    MaterialPageRoute(builder: (_) => const AccountsScreen()),
                   );
                   _loadData();
                 },
@@ -504,20 +520,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildRecentTransactions() {
-    const meses = [
-      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
-    ];
-    final mesLabel = '${meses[_selectedMonth.month - 1]}/${_selectedMonth.year}';
     return Column(
       children: [
         SectionHeader(
-          title: 'Transações de $mesLabel',
+          title: 'Últimas transações',
           action: 'Ver todas',
           onAction: () => Navigator.push(
             context,
-            MaterialPageRoute(
-                builder: (_) => const TransactionsScreen()),
+            MaterialPageRoute(builder: (_) => const TransactionsScreen()),
           ),
         ),
         const SizedBox(height: 12),
@@ -562,8 +572,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   await Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const AddTransactionScreen(
-                          initialIsDespesa: true),
+                      builder: (_) =>
+                          const AddTransactionScreen(initialIsDespesa: true),
                     ),
                   );
                   AppState.notify();
@@ -571,7 +581,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 },
               ),
             ),
-            SizedBox(width: 12),
+            const SizedBox(width: 12),
             Expanded(
               child: _QuickAction(
                 icon: Icons.add_rounded,
@@ -582,8 +592,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   await Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const AddTransactionScreen(
-                          initialIsDespesa: false),
+                      builder: (_) =>
+                          const AddTransactionScreen(initialIsDespesa: false),
                     ),
                   );
                   AppState.notify();
@@ -614,31 +624,123 @@ class _DashboardScreenState extends State<DashboardScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
+      builder: (_) => FutureBuilder<List<DashboardReminder>>(
+        future: FinanceService.getDashboardReminders(),
+        builder: (context, snapshot) {
+          final reminders = snapshot.data ?? const <DashboardReminder>[];
+          return Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: context.appDivider,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text('Lembretes',
+                    style: TextStyle(
+                        color: context.textPrimary,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 20),
+                if (snapshot.connectionState == ConnectionState.waiting)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 20),
+                    child: CircularProgressIndicator(),
+                  )
+                else if (reminders.isEmpty)
+                  EmptyState(
+                    icon: Icons.notifications_outlined,
+                    title: 'Nenhum lembrete agora',
+                    subtitle:
+                        'Quando houver orçamentos ou faturas em alerta, eles aparecem aqui.',
+                    accentColor: AppColors.amber,
+                  )
+                else
+                  ...reminders.map((reminder) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: _ReminderTile(reminder: reminder),
+                      )),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _showUserMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: context.appSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (_) => Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 40,
-              height: 4,
-              decoration: BoxDecoration(
-                color: context.appDivider,
-                borderRadius: BorderRadius.circular(2),
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: context.appDivider,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
-            SizedBox(height: 16),
-            Text('Lembretes',
-                style: TextStyle(
-                    color: context.textPrimary,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700)),
-            const SizedBox(height: 24),
-            EmptyState(
-              icon: Icons.notifications_outlined,
-              title: 'Nenhum lembrete',
-              subtitle: 'Configure lembretes nas transações',
-              accentColor: AppColors.amber,
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: context.primaryLight,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(Icons.person, color: context.primary),
+                ),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_nomeUsuario,
+                        style: TextStyle(
+                            color: context.textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700)),
+                    Text('Perfil e preferências',
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 12)),
+                  ],
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.settings_outlined, color: context.primary),
+              title: Text('Abrir configurações',
+                  style: TextStyle(color: context.textPrimary)),
+              subtitle: Text('Nome, tema, dados e notificações',
+                  style: TextStyle(color: context.textSecondary)),
+              onTap: () async {
+                Navigator.pop(context);
+                await Navigator.push(
+                  this.context,
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                );
+                _loadData();
+              },
             ),
           ],
         ),
@@ -697,11 +799,20 @@ class _WhiteMonthPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const meses = [
-      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+      'Jan',
+      'Fev',
+      'Mar',
+      'Abr',
+      'Mai',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Set',
+      'Out',
+      'Nov',
+      'Dez'
     ];
-    final label =
-        '${meses[selectedMonth.month - 1]} ${selectedMonth.year}';
+    final label = '${meses[selectedMonth.month - 1]} ${selectedMonth.year}';
     return Container(
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.2),
@@ -711,11 +822,10 @@ class _WhiteMonthPill extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.chevron_left,
-                color: Colors.white70, size: 18),
+            icon:
+                const Icon(Icons.chevron_left, color: Colors.white70, size: 18),
             onPressed: onPrev,
-            constraints:
-                const BoxConstraints(minWidth: 32, minHeight: 32),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             padding: EdgeInsets.zero,
           ),
           Text(
@@ -730,8 +840,7 @@ class _WhiteMonthPill extends StatelessWidget {
             icon: const Icon(Icons.chevron_right,
                 color: Colors.white70, size: 18),
             onPressed: onNext,
-            constraints:
-                const BoxConstraints(minWidth: 32, minHeight: 32),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             padding: EdgeInsets.zero,
           ),
         ],
@@ -748,8 +857,7 @@ class _TrendBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.2),
         borderRadius: BorderRadius.circular(20),
@@ -757,9 +865,7 @@ class _TrendBadge extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            positive
-                ? Icons.trending_up_rounded
-                : Icons.trending_down_rounded,
+            positive ? Icons.trending_up_rounded : Icons.trending_down_rounded,
             color: Colors.white,
             size: 14,
           ),
@@ -783,7 +889,6 @@ class _TrendBadge extends StatelessWidget {
 class _SummaryCard extends StatelessWidget {
   final String label;
   final double value;
-  final double percent;
   final Color color;
   final Color bgColor;
   final IconData icon;
@@ -792,7 +897,6 @@ class _SummaryCard extends StatelessWidget {
   const _SummaryCard({
     required this.label,
     required this.value,
-    required this.percent,
     required this.color,
     required this.bgColor,
     required this.icon,
@@ -801,7 +905,6 @@ class _SummaryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isPos = percent >= 0;
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -821,53 +924,18 @@ class _SummaryCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: bgColor,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, color: color, size: 18),
-                ),
-                Spacer(),
-                Container(
-                  padding: EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: (isPos ? context.primary : AppColors.red)
-                        .withOpacity(0.12),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        isPos
-                            ? Icons.arrow_upward_rounded
-                            : Icons.arrow_downward_rounded,
-                        size: 10,
-                        color: isPos ? context.primary : AppColors.red,
-                      ),
-                      Text(
-                        '${percent.abs().toStringAsFixed(0)}%',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color:
-                              isPos ? context.primary : AppColors.red,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: bgColor,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color, size: 18),
             ),
             SizedBox(height: 12),
             Text(label,
-                style: TextStyle(
-                    color: context.textSecondary, fontSize: 12)),
+                style: TextStyle(color: context.textSecondary, fontSize: 12)),
             SizedBox(height: 4),
             Text(
               fmtBRL(value),
@@ -879,6 +947,71 @@ class _SummaryCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ReminderTile extends StatelessWidget {
+  final DashboardReminder reminder;
+
+  const _ReminderTile({required this.reminder});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (reminder.type) {
+      TipoInsight.alertaGasto => AppColors.red,
+      TipoInsight.alertaSaldo => AppColors.amber,
+      TipoInsight.gastoAlto => AppColors.blue,
+      _ => context.primary,
+    };
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: context.appCardLight,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.14),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(Icons.notifications_active_outlined,
+                color: color, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  reminder.title,
+                  style: TextStyle(
+                    color: context.textPrimary,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  reminder.subtitle,
+                  style: TextStyle(
+                    color: context.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -897,12 +1030,10 @@ class _LegendDot extends StatelessWidget {
         Container(
             width: 8,
             height: 8,
-            decoration:
-                BoxDecoration(color: color, shape: BoxShape.circle)),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
         SizedBox(width: 4),
         Text(label,
-            style: TextStyle(
-                fontSize: 11, color: context.textSecondary)),
+            style: TextStyle(fontSize: 11, color: context.textSecondary)),
       ],
     );
   }
@@ -913,9 +1044,7 @@ class _AccountTile extends StatelessWidget {
   final bool visible;
   final VoidCallback onTap;
   const _AccountTile(
-      {required this.conta,
-      required this.visible,
-      required this.onTap});
+      {required this.conta, required this.visible, required this.onTap});
 
   Color get _color {
     try {
@@ -951,7 +1080,10 @@ class _AccountTile extends StatelessWidget {
         child: Container(
           padding: EdgeInsets.all(16),
           decoration: BoxDecoration(
-            gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [context.primary.withOpacity(0.85), context.primary]),
+            gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [context.primary.withOpacity(0.85), context.primary]),
             borderRadius: BorderRadius.circular(16),
           ),
           child: Row(
@@ -978,8 +1110,7 @@ class _AccountTile extends StatelessWidget {
                             color: Colors.white)),
                     Text('Cartão de crédito',
                         style: const TextStyle(
-                            fontSize: 11,
-                            color: Colors.white70)),
+                            fontSize: 11, color: Colors.white70)),
                   ],
                 ),
               ),
@@ -994,13 +1125,12 @@ class _AccountTile extends StatelessWidget {
                         color: Colors.white),
                   ),
                   Text('disponível',
-                      style: const TextStyle(
-                          fontSize: 11, color: Colors.white70)),
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.white70)),
                 ],
               ),
               SizedBox(width: 4),
-              Icon(Icons.chevron_right,
-                  size: 18, color: Colors.white70),
+              Icon(Icons.chevron_right, size: 18, color: Colors.white70),
             ],
           ),
         ),
@@ -1010,8 +1140,7 @@ class _AccountTile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding:
-            EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: context.appSurface,
           borderRadius: BorderRadius.circular(14),
@@ -1047,9 +1176,8 @@ class _AccountTile extends StatelessWidget {
                           color: context.textPrimary)),
                   Text(
                     'Conta ${conta.tipo}',
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textSecondary),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textSecondary),
                   ),
                 ],
               ),
@@ -1065,14 +1193,12 @@ class _AccountTile extends StatelessWidget {
                       color: context.textPrimary),
                 ),
                 Text('saldo',
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textSecondary)),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textSecondary)),
               ],
             ),
             SizedBox(width: 4),
-            Icon(Icons.chevron_right,
-                size: 18, color: context.textTertiary),
+            Icon(Icons.chevron_right, size: 18, color: context.textTertiary),
           ],
         ),
       ),
@@ -1117,9 +1243,8 @@ class _TransactionTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(transacao.categoria,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textSecondary)),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textSecondary)),
               ],
             ),
           ),
@@ -1129,14 +1254,10 @@ class _TransactionTile extends StatelessWidget {
               Text(
                 '${isDespesa ? '-' : '+'}${fmtBRL(transacao.valor.abs())}',
                 style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: color),
+                    fontSize: 14, fontWeight: FontWeight.w700, color: color),
               ),
               Text(dtFmt.format(transacao.primeiraParcela),
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: context.textSecondary)),
+                  style: TextStyle(fontSize: 11, color: context.textSecondary)),
             ],
           ),
         ],
@@ -1186,9 +1307,7 @@ class _QuickAction extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                  color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600),
+                  color: color, fontSize: 11, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
           ],
@@ -1233,10 +1352,9 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
 
   Future<void> _loadMonth() async {
     setState(() => _loading = true);
-    final summary = await FinanceService.getMonthlySummary(
-        _month.year, _month.month);
-    final yearly =
-        await FinanceService.getYearlyComparison(_month.year);
+    final summary =
+        await FinanceService.getMonthlySummary(_month.year, _month.month);
+    final yearly = await FinanceService.getYearlyComparison(_month.year);
     if (!mounted) return;
     setState(() {
       _summary = summary;
@@ -1258,12 +1376,10 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
               size: 18, color: context.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
-        title: Text('Relatório',
-            style: TextStyle(color: context.textPrimary)),
+        title: Text('Relatório', style: TextStyle(color: context.textPrimary)),
         bottom: PreferredSize(
           preferredSize: Size.fromHeight(1),
-          child: Divider(
-              height: 1, thickness: 1, color: context.appDivider),
+          child: Divider(height: 1, thickness: 1, color: context.appDivider),
         ),
       ),
       body: _loading
@@ -1277,13 +1393,13 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                     child: MonthSelectorPill(
                       selectedMonth: _month,
                       onPrev: () {
-                        setState(() => _month =
-                            DateTime(_month.year, _month.month - 1));
+                        setState(() =>
+                            _month = DateTime(_month.year, _month.month - 1));
                         _loadMonth();
                       },
                       onNext: () {
-                        setState(() => _month =
-                            DateTime(_month.year, _month.month + 1));
+                        setState(() =>
+                            _month = DateTime(_month.year, _month.month + 1));
                         _loadMonth();
                       },
                     ),
@@ -1369,17 +1485,13 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                       style: TextStyle(
                         fontSize: 26,
                         fontWeight: FontWeight.w800,
-                        color:
-                            positivo ? context.primary : AppColors.red,
+                        color: positivo ? context.primary : AppColors.red,
                       ),
                     ),
                     Text(
-                      positivo
-                          ? 'Sobrou este mês'
-                          : 'Déficit este mês',
-                      style: TextStyle(
-                          color: context.textSecondary,
-                          fontSize: 13),
+                      positivo ? 'Sobrou este mês' : 'Déficit este mês',
+                      style:
+                          TextStyle(color: context.textSecondary, fontSize: 13),
                     ),
                   ],
                 ),
@@ -1391,8 +1503,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
-                value:
-                    (s.despesas / s.receitas).clamp(0.0, 1.0),
+                value: (s.despesas / s.receitas).clamp(0.0, 1.0),
                 backgroundColor: context.appCardLight,
                 valueColor: AlwaysStoppedAnimation(
                   s.despesas > s.receitas
@@ -1407,8 +1518,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
             SizedBox(height: 6),
             Text(
               '${(s.despesas / s.receitas * 100).toStringAsFixed(0)}% da renda comprometida',
-              style: TextStyle(
-                  color: context.textSecondary, fontSize: 12),
+              style: TextStyle(color: context.textSecondary, fontSize: 12),
             ),
           ],
         ],
@@ -1417,8 +1527,8 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
   }
 
   Widget _buildGraficoAnual() {
-    final hasData = _yearly.any((e) =>
-        (e['receitas'] ?? 0) > 0 || (e['despesas'] ?? 0) > 0);
+    final hasData = _yearly
+        .any((e) => (e['receitas'] ?? 0) > 0 || (e['despesas'] ?? 0) > 0);
     final maxVal = _yearly.fold<double>(
         0,
         (m, e) => [m, e['receitas'] ?? 0, e['despesas'] ?? 0]
@@ -1435,8 +1545,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
               child: EmptyState(
                 icon: Icons.bar_chart_outlined,
                 title: 'Nenhum dado ainda',
-                subtitle:
-                    'Adicione transações para ver a evolução anual',
+                subtitle: 'Adicione transações para ver a evolução anual',
                 accentColor: AppColors.blue,
               ),
             )
@@ -1444,11 +1553,9 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
             SizedBox(height: 6),
             Row(
               children: [
-                _LegendDot(
-                    color: context.primary, label: 'Receitas'),
+                _LegendDot(color: context.primary, label: 'Receitas'),
                 const SizedBox(width: 16),
-                _LegendDot(
-                    color: AppColors.red, label: 'Despesas'),
+                _LegendDot(color: AppColors.red, label: 'Despesas'),
               ],
             ),
             const SizedBox(height: 20),
@@ -1468,14 +1575,11 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                   borderData: FlBorderData(show: false),
                   titlesData: FlTitlesData(
                     leftTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     rightTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     topTitles: const AxisTitles(
-                        sideTitles:
-                            SideTitles(showTitles: false)),
+                        sideTitles: SideTitles(showTitles: false)),
                     bottomTitles: AxisTitles(
                       sideTitles: SideTitles(
                         showTitles: true,
@@ -1484,38 +1588,28 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                       ),
                     ),
                   ),
-                  barGroups:
-                      List.generate(_yearly.length, (i) {
-                    final isCurrent =
-                        i == _month.month - 1;
-                    return BarChartGroupData(
-                        x: i,
-                        barRods: [
-                          BarChartRodData(
-                            toY:
-                                _yearly[i]['receitas'] ?? 0,
-                            color: isCurrent
-                                ? context.primary
-                                : context.primary
-                                    .withOpacity(0.3),
-                            width: 6,
-                            borderRadius:
-                                const BorderRadius.vertical(
-                                    top: Radius.circular(4)),
-                          ),
-                          BarChartRodData(
-                            toY:
-                                _yearly[i]['despesas'] ?? 0,
-                            color: isCurrent
-                                ? AppColors.red
-                                : AppColors.red
-                                    .withOpacity(0.3),
-                            width: 6,
-                            borderRadius:
-                                const BorderRadius.vertical(
-                                    top: Radius.circular(4)),
-                          ),
-                        ]);
+                  barGroups: List.generate(_yearly.length, (i) {
+                    final isCurrent = i == _month.month - 1;
+                    return BarChartGroupData(x: i, barRods: [
+                      BarChartRodData(
+                        toY: _yearly[i]['receitas'] ?? 0,
+                        color: isCurrent
+                            ? context.primary
+                            : context.primary.withOpacity(0.3),
+                        width: 6,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(4)),
+                      ),
+                      BarChartRodData(
+                        toY: _yearly[i]['despesas'] ?? 0,
+                        color: isCurrent
+                            ? AppColors.red
+                            : AppColors.red.withOpacity(0.3),
+                        width: 6,
+                        borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(4)),
+                      ),
+                    ]);
                   }),
                 ),
               ),
@@ -1530,8 +1624,18 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
 
   Widget _buildTabelaAnual() {
     const meses = [
-      'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-      'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+      'Jan',
+      'Fev',
+      'Mar',
+      'Abr',
+      'Mai',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Set',
+      'Out',
+      'Nov',
+      'Dez'
     ];
     final rows = <Widget>[];
     for (int i = 0; i < _yearly.length; i++) {
@@ -1541,8 +1645,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
       if (rec == 0 && desp == 0) continue;
       final isCurrent = i == _month.month - 1;
       rows.add(Container(
-        padding:
-            EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+        padding: EdgeInsets.symmetric(vertical: 8, horizontal: 4),
         decoration: BoxDecoration(
           color: isCurrent
               ? context.primary.withOpacity(0.06)
@@ -1557,26 +1660,20 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                 meses[i],
                 style: TextStyle(
                   fontSize: 12,
-                  color: isCurrent
-                      ? context.primary
-                      : context.textSecondary,
-                  fontWeight: isCurrent
-                      ? FontWeight.w700
-                      : FontWeight.w400,
+                  color: isCurrent ? context.primary : context.textSecondary,
+                  fontWeight: isCurrent ? FontWeight.w700 : FontWeight.w400,
                 ),
               ),
             ),
             Expanded(
               child: Text(fmtBRL(rec),
                   textAlign: TextAlign.right,
-                  style: TextStyle(
-                      fontSize: 12, color: context.primary)),
+                  style: TextStyle(fontSize: 12, color: context.primary)),
             ),
             Expanded(
               child: Text(fmtBRL(desp),
                   textAlign: TextAlign.right,
-                  style: TextStyle(
-                      fontSize: 12, color: AppColors.red)),
+                  style: TextStyle(fontSize: 12, color: AppColors.red)),
             ),
             Expanded(
               child: Text(
@@ -1585,9 +1682,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.w600,
-                  color: saldo >= 0
-                      ? context.primary
-                      : AppColors.red,
+                  color: saldo >= 0 ? context.primary : AppColors.red,
                 ),
               ),
             ),
@@ -1607,21 +1702,18 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
             Expanded(
                 child: Text('Receita',
                     textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textTertiary))),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textTertiary))),
             Expanded(
                 child: Text('Despesa',
                     textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textTertiary))),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textTertiary))),
             Expanded(
                 child: Text('Saldo',
                     textAlign: TextAlign.right,
-                    style: TextStyle(
-                        fontSize: 11,
-                        color: context.textTertiary))),
+                    style:
+                        TextStyle(fontSize: 11, color: context.textTertiary))),
           ],
         ),
         const SizedBox(height: 8),
@@ -1655,18 +1747,15 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                         height: 32,
                         decoration: BoxDecoration(
                           color: color.withOpacity(0.12),
-                          borderRadius:
-                              BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(8),
                         ),
-                        child: Icon(icon,
-                            color: color, size: 16),
+                        child: Icon(icon, color: color, size: 16),
                       ),
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(e.key,
                             style: TextStyle(
-                                color: context.textPrimary,
-                                fontSize: 13)),
+                                color: context.textPrimary, fontSize: 13)),
                       ),
                       Text(fmtBRL(e.value),
                           style: TextStyle(
@@ -1679,8 +1768,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                         child: Text(
                           '${(pct * 100).toStringAsFixed(0)}%',
                           style: TextStyle(
-                              color: context.textSecondary,
-                              fontSize: 11),
+                              color: context.textSecondary, fontSize: 11),
                           textAlign: TextAlign.right,
                         ),
                       ),
@@ -1692,8 +1780,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                     child: LinearProgressIndicator(
                       value: pct,
                       backgroundColor: context.appCardLight,
-                      valueColor:
-                          AlwaysStoppedAnimation(color),
+                      valueColor: AlwaysStoppedAnimation(color),
                       minHeight: 4,
                     ),
                   ),
@@ -1744,31 +1831,24 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                   SizedBox(width: 12),
                   Expanded(
                     child: Column(
-                      crossAxisAlignment:
-                          CrossAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(c.nome,
                             style: TextStyle(
                                 color: context.textPrimary,
                                 fontSize: 13,
-                                fontWeight:
-                                    FontWeight.w600)),
+                                fontWeight: FontWeight.w600)),
                         Text(c.tipo,
                             style: TextStyle(
-                                color:
-                                    context.textSecondary,
-                                fontSize: 11)),
+                                color: context.textSecondary, fontSize: 11)),
                       ],
                     ),
                   ),
                   Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.end,
+                    crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       Text(
-                        fmtBRL(isCredito
-                            ? c.disponivel
-                            : c.saldo),
+                        fmtBRL(isCredito ? c.disponivel : c.saldo),
                         style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.w700,
@@ -1784,8 +1864,7 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
                       Text(
                         isCredito ? 'disponível' : 'saldo',
                         style: TextStyle(
-                            color: context.textSecondary,
-                            fontSize: 11),
+                            color: context.textSecondary, fontSize: 11),
                       ),
                     ],
                   ),
@@ -1857,8 +1936,7 @@ class _RelatorioCard extends StatelessWidget {
           ),
           SizedBox(height: 12),
           Text(label,
-              style: TextStyle(
-                  color: context.textSecondary, fontSize: 12)),
+              style: TextStyle(color: context.textSecondary, fontSize: 12)),
           SizedBox(height: 4),
           Text(
             fmtBRL(value),

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import '../models/transaction.dart';
@@ -6,6 +7,21 @@ import '../models/orcamento.dart';
 
 class AppDB {
   static Database? _db;
+  static Map<String, String>? _configCache;
+  static const String balanceAccountId = 'conta_renda_base';
+
+  static Future<T> _runCriticalWrite<T>(
+    String operation,
+    Future<T> Function() action,
+  ) async {
+    try {
+      return await action();
+    } catch (e, st) {
+      debugPrint('[AppDB] Falha em $operation: $e');
+      debugPrint('$st');
+      rethrow;
+    }
+  }
 
   static Future<Database> get db async {
     _db ??= await _init();
@@ -13,10 +29,10 @@ class AppDB {
   }
 
   static Future<Database> _init() async {
-    final path = join(await getDatabasesPath(), 'financeapp_v2.db');
+    final path = join(await getDatabasesPath(), 'Uffa_v2.db');
     return openDatabase(
       path,
-      version: 9,
+      version: 13,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -66,6 +82,33 @@ class AppDB {
       await db.execute(
           'ALTER TABLE orcamentos ADD COLUMN rollover INTEGER NOT NULL DEFAULT 0');
     }
+    if (oldVersion < 10) {
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_transacoes_recorrencia ON transacoes(recorrencia)');
+      await db.execute(
+          'CREATE INDEX IF NOT EXISTS idx_transacoes_banco_tipo ON transacoes(banco, tipo, recorrencia)');
+    }
+    if (oldVersion < 11) {
+      await db.execute(
+        'UPDATE transacoes SET tipo = ? WHERE tipo = ? AND valor > 0',
+        [TipoTransacao.receita.index, TipoTransacao.entrada.index],
+      );
+    }
+    if (oldVersion < 12) {
+      await db.update(
+        'contas',
+        {'nome': 'Saldo'},
+        where: 'id = ?',
+        whereArgs: [balanceAccountId],
+      );
+    }
+    if (oldVersion < 13) {
+      await db.execute(
+          'ALTER TABLE transacoes ADD COLUMN recorrencia_data_base TEXT');
+      await db.execute(
+        'UPDATE transacoes SET recorrencia_data_base = primeira_parcela WHERE recorrencia > 0 AND recorrencia_data_base IS NULL',
+      );
+    }
   }
 
   static Future<void> _createTables(Database db) async {
@@ -76,6 +119,7 @@ class AppDB {
         banco TEXT NOT NULL DEFAULT 'geral',
         parcelas INTEGER NOT NULL DEFAULT 1,
         primeira_parcela TEXT NOT NULL,
+        recorrencia_data_base TEXT,
         categoria TEXT DEFAULT '',
         tipo INTEGER NOT NULL DEFAULT 0,
         descricao TEXT,
@@ -122,6 +166,10 @@ class AppDB {
     await db.execute(
         'CREATE INDEX idx_transacoes_data ON transacoes(primeira_parcela)');
     await db.execute('CREATE INDEX idx_transacoes_banco ON transacoes(banco)');
+    await db.execute(
+        'CREATE INDEX idx_transacoes_recorrencia ON transacoes(recorrencia)');
+    await db.execute(
+        'CREATE INDEX idx_transacoes_banco_tipo ON transacoes(banco, tipo, recorrencia)');
   }
 
   static Future<void> _createRecorrenciaExcecoesTable(Database db) async {
@@ -281,61 +329,170 @@ class AppDB {
     return dataTransacao;
   }
 
-  static Future<void> insertTransacao(Transacao t) async {
-    Transacao transacaoFinal = t;
+  static Future<Transacao> _ajustarTransacaoCredito(
+    Transacao t,
+    DatabaseExecutor executor,
+  ) async {
+    if (t.valor >= 0 || t.banco == 'geral' || t.banco.isEmpty) return t;
 
-    // For credit card expenses, adjust the date based on closing day
-    if (t.valor < 0 && t.banco != 'geral' && t.banco.isNotEmpty) {
-      final contaMaps = await (await db)
-          .query('contas', where: 'id = ?', whereArgs: [t.banco]);
-      if (contaMaps.isNotEmpty) {
-        final conta = Conta.fromMap(contaMaps.first);
-        if (conta.tipo == 'credito') {
-          final dataEfetiva = _dataCreditoEfetiva(t.primeiraParcela, conta);
-          if (dataEfetiva != t.primeiraParcela) {
-            transacaoFinal = t.copyWith(primeiraParcela: dataEfetiva);
-          }
-        }
-      }
+    final contaMaps =
+        await executor.query('contas', where: 'id = ?', whereArgs: [t.banco]);
+    if (contaMaps.isEmpty) return t;
+
+    final conta = Conta.fromMap(contaMaps.first);
+    if (conta.tipo != 'credito') return t;
+
+    final dataEfetiva = _dataCreditoEfetiva(t.primeiraParcela, conta);
+    if (dataEfetiva == t.primeiraParcela) return t;
+
+    return t.copyWith(primeiraParcela: dataEfetiva);
+  }
+
+  static bool _permiteAtualizacaoIncremental(Transacao t) {
+    return t.banco != 'geral' &&
+        t.banco.isNotEmpty &&
+        t.recorrencia == Recorrencia.nenhuma;
+  }
+
+  static double _impactoSaldoAteHoje(Transacao t, Conta conta, DateTime now) {
+    if (conta.tipo == 'credito') {
+      if (t.valor > 0) return -t.valor;
+
+      // Disponível do cartão é limite menos saldo devedor contratado.
+      // Compras parceladas reduzem o limite pelo valor total ainda não pago,
+      // inclusive parcelas futuras; pagamentos reduzem a dívida.
+      return t.valor.abs();
     }
 
-    await (await db).insert('transacoes', transacaoFinal.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
-    await _recalcularSaldoConta(transacaoFinal.banco);
+    double impacto = 0.0;
+    for (int i = 0; i < t.parcelas; i++) {
+      final rawDate = DateTime(
+        t.primeiraParcela.year,
+        t.primeiraParcela.month + i,
+        1,
+      );
+      final lastDay = DateTime(rawDate.year, rawDate.month + 1, 0).day;
+      final dt = DateTime(
+        rawDate.year,
+        rawDate.month,
+        t.primeiraParcela.day.clamp(1, lastDay),
+      );
+      if (!dt.isAfter(now)) impacto += t.valorParcela;
+    }
+    return impacto;
+  }
+
+  static Future<bool> _aplicarDeltaSaldoConta(
+    String bancoId,
+    double delta,
+  ) async {
+    if (bancoId == 'geral' || bancoId.isEmpty || delta == 0) return true;
+
+    final database = await db;
+    final rows =
+        await database.query('contas', where: 'id = ?', whereArgs: [bancoId]);
+    if (rows.isEmpty) return false;
+
+    final conta = Conta.fromMap(rows.first);
+    final saldo = conta.tipo == 'credito'
+        ? (conta.saldo + delta).clamp(0.0, double.infinity)
+        : conta.saldo + delta;
+    await database.update(
+      'contas',
+      {'saldo': saldo},
+      where: 'id = ?',
+      whereArgs: [bancoId],
+    );
+    return true;
+  }
+
+  static Future<Conta?> _getContaById(String id) async {
+    if (id == 'geral' || id.isEmpty) return null;
+    final maps =
+        await (await db).query('contas', where: 'id = ?', whereArgs: [id]);
+    if (maps.isEmpty) return null;
+    return Conta.fromMap(maps.first);
+  }
+
+  static DateTime _mesAbertoCredito(Conta conta, DateTime referencia) {
+    final fechamento = conta.diaFechamento;
+    if (fechamento != null && fechamento > 0 && referencia.day > fechamento) {
+      return DateTime(referencia.year, referencia.month + 1);
+    }
+    return DateTime(referencia.year, referencia.month);
+  }
+
+  static Future<void> insertTransacao(Transacao t) async {
+    await _runCriticalWrite('insertTransacao', () async {
+      final database = await db;
+      final transacaoFinal = await _ajustarTransacaoCredito(t, database);
+      final old = await _getTransacaoById(transacaoFinal.id);
+      await database.insert('transacoes', transacaoFinal.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      if (old == null && _permiteAtualizacaoIncremental(transacaoFinal)) {
+        final conta = await _getContaById(transacaoFinal.banco);
+        if (conta != null) {
+          final delta =
+              _impactoSaldoAteHoje(transacaoFinal, conta, DateTime.now());
+          await _aplicarDeltaSaldoConta(transacaoFinal.banco, delta);
+          return;
+        }
+      }
+      await _recalcularSaldoConta(transacaoFinal.banco);
+    });
   }
 
   static Future<void> updateTransacao(Transacao t) async {
-    final old = await _getTransacaoById(t.id);
+    await _runCriticalWrite('updateTransacao', () async {
+      final old = await _getTransacaoById(t.id);
+      final database = await db;
+      final transacaoFinal = await _ajustarTransacaoCredito(t, database);
 
-    Transacao transacaoFinal = t;
-
-    // For credit card expenses, adjust the date based on closing day
-    if (t.valor < 0 && t.banco != 'geral' && t.banco.isNotEmpty) {
-      final contaMaps = await (await db)
-          .query('contas', where: 'id = ?', whereArgs: [t.banco]);
-      if (contaMaps.isNotEmpty) {
-        final conta = Conta.fromMap(contaMaps.first);
-        if (conta.tipo == 'credito') {
-          final dataEfetiva = _dataCreditoEfetiva(t.primeiraParcela, conta);
-          if (dataEfetiva != t.primeiraParcela) {
-            transacaoFinal = t.copyWith(primeiraParcela: dataEfetiva);
-          }
-        }
+      await database.update('transacoes', transacaoFinal.toMap(),
+          where: 'id = ?', whereArgs: [transacaoFinal.id]);
+      if (old != null && old.banco != transacaoFinal.banco) {
+        await _recalcularSaldoConta(old.banco);
       }
-    }
-
-    await (await db).update('transacoes', transacaoFinal.toMap(),
-        where: 'id = ?', whereArgs: [transacaoFinal.id]);
-    if (old != null && old.banco != transacaoFinal.banco) {
-      await _recalcularSaldoConta(old.banco);
-    }
-    await _recalcularSaldoConta(transacaoFinal.banco);
+      await _recalcularSaldoConta(transacaoFinal.banco);
+    });
   }
 
   static Future<void> deleteTransacao(String id) async {
-    final t = await _getTransacaoById(id);
-    await (await db).delete('transacoes', where: 'id = ?', whereArgs: [id]);
-    if (t != null) await _recalcularSaldoConta(t.banco);
+    await _runCriticalWrite('deleteTransacao', () async {
+      final t = await _getTransacaoById(id);
+      await (await db).delete('transacoes', where: 'id = ?', whereArgs: [id]);
+      if (t != null && _permiteAtualizacaoIncremental(t)) {
+        final conta = await _getContaById(t.banco);
+        if (conta != null) {
+          final delta = -_impactoSaldoAteHoje(t, conta, DateTime.now());
+          await _aplicarDeltaSaldoConta(t.banco, delta);
+          return;
+        }
+      }
+      if (t != null) await _recalcularSaldoConta(t.banco);
+    });
+  }
+
+  static Future<void> insertTransferencia({
+    required Transacao saida,
+    required Transacao entrada,
+  }) async {
+    await _runCriticalWrite('insertTransferencia', () async {
+      final database = await db;
+      await database.transaction((txn) async {
+        final saidaFinal = await _ajustarTransacaoCredito(saida, txn);
+        final entradaFinal = await _ajustarTransacaoCredito(entrada, txn);
+        await txn.insert('transacoes', saidaFinal.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+        await txn.insert('transacoes', entradaFinal.toMap(),
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      });
+
+      await _recalcularSaldoConta(saida.banco);
+      if (entrada.banco != saida.banco) {
+        await _recalcularSaldoConta(entrada.banco);
+      }
+    });
   }
 
   static Future<void> deleteTransacaoMes(String id, int ano, int mes) async {
@@ -398,31 +555,13 @@ class AppDB {
     }
 
     if (conta.tipo == 'credito') {
-      // Saldo devedor do cartão = soma de todas as despesas registradas
-      // menos todos os pagamentos registrados. SEM filtro de data.
-      //
-      // Por que sem filtro de data?
-      // ─────────────────────────────────────────────────────────────────
-      // O app desloca artificialmente a data de compras feitas após o dia
-      // de fechamento para o mês seguinte (para agrupamento de fatura).
-      // Exemplo: fechamento dia 5, compra no dia 18/05 → gravada como 18/06.
-      // Se filtrarmos "apenas datas <= hoje (18/05)", essa despesa seria
-      // ignorada porque 18/06 > 18/05, deixando o saldo zerado.
-      //
-      // Da mesma forma, pagamentos são gravados com a data de vencimento
-      // da fatura (ex: dia 25/06), que é futura. Filtrar por data excluiria
-      // o pagamento e o saldo nunca diminuiria após pagar.
-      //
-      // A data ajustada serve apenas para agrupar corretamente na tela de
-      // fatura; para o saldo devedor o que importa é: a transação existe?
-      // Se sim, ela compõe o saldo — independente da data armazenada.
-      //
-      // Para compras parceladas, somamos apenas as parcelas cujo número
-      // de meses a partir da primeiraParcela já ocorreu (parcela já "caiu"),
-      // evitando inflar o saldo com parcelas futuras ainda não devidas.
+      // Saldo devedor do cartão = compras registradas ainda não pagas.
+      // Compras parceladas comprometem o limite pelo total contratado,
+      // inclusive parcelas futuras. A tela de fatura continua agrupando por
+      // competência, mas "Disponível" reflete o limite real já comprometido.
       double totalDespesas = 0.0;
       double totalPagamentos = 0.0;
-      final mesAtual = DateTime(now.year, now.month);
+      final mesAberto = _mesAbertoCredito(conta, now);
 
       for (final t in transacoes) {
         if (t.valor > 0) {
@@ -431,25 +570,15 @@ class AppDB {
         } else {
           // Despesa
           if (t.recorrencia == Recorrencia.nenhuma) {
-            // Soma cada parcela cuja competência (mês/ano) já chegou ou é atual.
-            // Usamos o mês da parcela (não o dia exato) para não penalizar
-            // compras deslocadas para o próximo mês pelo mecanismo de fechamento.
-            for (int i = 0; i < t.parcelas; i++) {
-              final mesParcela = DateTime(
-                t.primeiraParcela.year,
-                t.primeiraParcela.month + i,
-              );
-              // Parcela competente = mês já chegou (passado ou atual)
-              if (!mesParcela.isAfter(mesAtual)) {
-                totalDespesas += t.valorParcela.abs();
-              }
-            }
+            totalDespesas += t.valor.abs();
           } else {
-            // Recorrentes: soma ocorrências até o mês atual
+            // Recorrentes: soma ocorrências até a competência atualmente
+            // aberta do cartão, para manter "Disponível" alinhado com a
+            // tela de fatura.
             final inicio =
                 DateTime(t.primeiraParcela.year, t.primeiraParcela.month);
             var cursor = inicio;
-            while (!cursor.isAfter(mesAtual)) {
+            while (!cursor.isAfter(mesAberto)) {
               if (!excecoes
                   .contains('${t.id}|${cursor.year}|${cursor.month}')) {
                 totalDespesas += t.valorNoMes(cursor.year, cursor.month).abs();
@@ -524,27 +653,43 @@ class AppDB {
     return maps.map((m) => Conta.fromMap(m)).toList();
   }
 
+  static Future<void> recalculateAllAccountBalances() async {
+    final contas = await getContas();
+    for (final conta in contas) {
+      await _recalcularSaldoConta(conta.id);
+    }
+  }
+
   static Future<void> insertConta(Conta c) async {
-    // saldo_inicial captures the manually entered opening balance.
-    // The saldo column will be recalculated from saldo_inicial + transactions.
-    final conta = c.copyWith(saldoInicial: c.saldo);
-    await (await db).insert('contas', conta.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
-    // Recalculate in case there are transactions already linked to this account.
-    await _recalcularSaldoConta(c.id);
+    await _runCriticalWrite('insertConta', () async {
+      // saldo_inicial captures the manually entered opening balance.
+      // The saldo column will be recalculated from saldo_inicial + transactions.
+      final conta = c.copyWith(saldoInicial: c.saldo);
+      await (await db).insert('contas', conta.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace);
+      // Recalculate in case there are transactions already linked to this account.
+      await _recalcularSaldoConta(c.id);
+    });
   }
 
   static Future<void> updateConta(Conta c) async {
-    // Preserve existing saldo_inicial if the user didn't touch the opening balance field.
-    // The caller (edit form) passes saldoInicial from the original account.
-    await (await db)
-        .update('contas', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
-    // Recalculate saldo from saldo_inicial + transactions
-    await _recalcularSaldoConta(c.id);
+    await _runCriticalWrite('updateConta', () async {
+      if (isManagedBalanceAccountId(c.id)) return;
+      // Preserve existing saldo_inicial if the user didn't touch the opening balance field.
+      // The caller (edit form) passes saldoInicial from the original account.
+      await (await db)
+          .update('contas', c.toMap(), where: 'id = ?', whereArgs: [c.id]);
+      // Recalculate saldo from saldo_inicial + transactions
+      await _recalcularSaldoConta(c.id);
+    });
   }
 
   static Future<void> deleteConta(String id) async {
-    await (await db).delete('contas', where: 'id = ?', whereArgs: [id]);
+    if (isManagedBalanceAccountId(id)) return;
+    await _runCriticalWrite(
+      'deleteConta',
+      () async => (await db).delete('contas', where: 'id = ?', whereArgs: [id]),
+    );
   }
 
   // ── ORÇAMENTOS ──────────────────────────────────────────────
@@ -562,12 +707,19 @@ class AppDB {
   }
 
   static Future<void> upsertOrcamento(Orcamento o) async {
-    await (await db).insert('orcamentos', o.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await _runCriticalWrite(
+      'upsertOrcamento',
+      () async => (await db).insert('orcamentos', o.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace),
+    );
   }
 
   static Future<void> deleteOrcamento(String id) async {
-    await (await db).delete('orcamentos', where: 'id = ?', whereArgs: [id]);
+    await _runCriticalWrite(
+      'deleteOrcamento',
+      () async =>
+          (await db).delete('orcamentos', where: 'id = ?', whereArgs: [id]),
+    );
   }
 
   /// Retorna o limite efetivo de um orçamento com rollover para o mês/ano alvo.
@@ -632,6 +784,103 @@ class AppDB {
     return orcamento.limite + rolloverAcumulado;
   }
 
+  static int monthKey(int ano, int mes) => ano * 100 + mes;
+
+  /// Calcula gastos mensais de uma categoria em lote.
+  ///
+  /// Evita a sequência de uma query por mês usada no cálculo de rollover:
+  /// carrega transações e exceções uma vez e distribui os valores por mês em
+  /// memória, preservando a mesma regra de [Transacao.valorNoMes].
+  static Future<Map<int, double>> getGastosMensaisCategoria({
+    required String categoria,
+    required DateTime inicio,
+    required DateTime fim,
+  }) async {
+    final database = await db;
+    final txMaps = await database.query(
+      'transacoes',
+      where: 'categoria = ?',
+      whereArgs: [categoria],
+    );
+    final transacoes = txMaps.map((m) => Transacao.fromMap(m)).toList();
+    if (transacoes.isEmpty) return {};
+
+    final ids = transacoes.map((t) => t.id).toList();
+    final placeholders = List.filled(ids.length, '?').join(',');
+    final excecoesMaps = await database.rawQuery(
+      'SELECT transacao_id, ano, mes FROM recorrencia_excecoes '
+      'WHERE transacao_id IN ($placeholders)',
+      ids,
+    );
+    final excecoes = <String>{
+      for (final e in excecoesMaps)
+        '${e['transacao_id']}|${e['ano']}|${e['mes']}',
+    };
+
+    final result = <int, double>{};
+    var cursor = DateTime(inicio.year, inicio.month);
+    final fimMes = DateTime(fim.year, fim.month);
+    while (!cursor.isAfter(fimMes)) {
+      double total = 0;
+      for (final t in transacoes) {
+        if (t.isTransferencia) continue;
+        if (excecoes.contains('${t.id}|${cursor.year}|${cursor.month}')) {
+          continue;
+        }
+        final v = t.valorNoMes(cursor.year, cursor.month);
+        if (v < 0) total += v.abs();
+      }
+      result[monthKey(cursor.year, cursor.month)] = total;
+      cursor = DateTime(cursor.year, cursor.month + 1);
+    }
+    return result;
+  }
+
+  static double calcularLimiteEfetivoComGastos({
+    required Orcamento orcamento,
+    required List<Orcamento> orcamentosDaCategoria,
+    required Map<int, double> gastosPorMes,
+  }) {
+    if (!orcamento.rollover) return orcamento.limite;
+
+    final mesmaCat = orcamentosDaCategoria
+        .where((o) => o.categoria == orcamento.categoria && o.rollover)
+        .toList()
+      ..sort((a, b) {
+        final dateA = DateTime(a.ano, a.mes);
+        final dateB = DateTime(b.ano, b.mes);
+        return dateA.compareTo(dateB);
+      });
+
+    if (mesmaCat.isEmpty) return orcamento.limite;
+
+    final inicioDate = DateTime(mesmaCat.first.ano, mesmaCat.first.mes);
+    final alvoDate = DateTime(orcamento.ano, orcamento.mes);
+    if (!inicioDate.isBefore(alvoDate)) return orcamento.limite;
+
+    double rolloverAcumulado = 0;
+    var cursor = inicioDate;
+    while (cursor.isBefore(alvoDate)) {
+      final orcMes = mesmaCat.firstWhere(
+        (o) => o.ano == cursor.year && o.mes == cursor.month,
+        orElse: () => Orcamento(
+          categoria: orcamento.categoria,
+          limite: orcamento.limite,
+          mes: cursor.month,
+          ano: cursor.year,
+          rollover: true,
+        ),
+      );
+      final limiteComRollover = orcMes.limite + rolloverAcumulado;
+      final gasto = gastosPorMes[monthKey(cursor.year, cursor.month)] ?? 0;
+      final sobra = limiteComRollover - gasto;
+      rolloverAcumulado = sobra > 0 ? sobra : 0;
+      cursor = DateTime(cursor.year, cursor.month + 1);
+    }
+
+    return orcamento.limite + rolloverAcumulado;
+  }
+
   // ── METAS ───────────────────────────────────────────────────
 
   static Future<List<Meta>> getMetas() async {
@@ -640,12 +889,18 @@ class AppDB {
   }
 
   static Future<void> upsertMeta(Meta m) async {
-    await (await db).insert('metas', m.toMap(),
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await _runCriticalWrite(
+      'upsertMeta',
+      () async => (await db).insert('metas', m.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.replace),
+    );
   }
 
   static Future<void> deleteMeta(String id) async {
-    await (await db).delete('metas', where: 'id = ?', whereArgs: [id]);
+    await _runCriticalWrite(
+      'deleteMeta',
+      () async => (await db).delete('metas', where: 'id = ?', whereArgs: [id]),
+    );
   }
 
   // ── CATEGORIAS ──────────────────────────────────────────────
@@ -687,20 +942,42 @@ class AppDB {
   // ── CONFIG ──────────────────────────────────────────────────
 
   static Future<Map<String, String>> getConfig() async {
+    if (_configCache != null) {
+      return Map<String, String>.from(_configCache!);
+    }
     final maps = await (await db).query('config');
-    return {for (var m in maps) m['key'] as String: m['value'] as String};
+    _configCache = {
+      for (var m in maps) m['key'] as String: m['value'] as String,
+    };
+    return Map<String, String>.from(_configCache!);
   }
 
   static Future<void> setConfig(String key, String value) async {
-    await (await db).insert('config', {'key': key, 'value': value},
-        conflictAlgorithm: ConflictAlgorithm.replace);
+    await _runCriticalWrite(
+      'setConfig($key)',
+      () async {
+        await (await db).insert('config', {'key': key, 'value': value},
+            conflictAlgorithm: ConflictAlgorithm.replace);
+        _configCache ??= {};
+        _configCache![key] = value;
+      },
+    );
   }
 
   static Future<void> deleteConfig(String key) async {
-    await (await db).delete('config', where: 'key = ?', whereArgs: [key]);
+    await _runCriticalWrite(
+      'deleteConfig($key)',
+      () async {
+        await (await db).delete('config', where: 'key = ?', whereArgs: [key]);
+        _configCache?.remove(key);
+      },
+    );
   }
 
   static Future<String?> getConfigValue(String key) async {
+    if (_configCache != null) {
+      return _configCache![key];
+    }
     final maps =
         await (await db).query('config', where: 'key = ?', whereArgs: [key]);
     if (maps.isEmpty) return null;
@@ -709,7 +986,9 @@ class AppDB {
 
   // ── RENDA BASE ──────────────────────────────────────────────
   // ID fixo para a conta-salário criada automaticamente
-  static const String _rendaContaId = 'conta_renda_base';
+  static const String _rendaContaId = balanceAccountId;
+
+  static bool isManagedBalanceAccountId(String id) => id == balanceAccountId;
 
   /// Calcula o n-ésimo dia útil (seg-sex) de um mês.
   static DateTime _nthWeekday(int ano, int mes, int n) {
@@ -733,94 +1012,109 @@ class AppDB {
     int? diaFixo,
     int? nthDiaUtil,
   }) async {
-    final database = await db;
+    await _runCriticalWrite('salvarRendaBase', () async {
+      final database = await db;
 
-    // 1. Cria ou atualiza a conta "Salário"
-    final contaExistente = await database.query(
-      'contas',
-      where: 'id = ?',
-      whereArgs: [_rendaContaId],
-    );
-    if (contaExistente.isEmpty) {
-      await database.insert(
-          'contas',
-          {
-            'id': _rendaContaId,
-            'nome': 'Salário',
-            'limite': 0,
-            'saldo': 0,
-            'saldo_inicial': 0,
-            'tipo': 'corrente',
-            'cor': '22C55E',
-            'icone': 'salario',
-            'dia_vencimento': null,
-            'dia_fechamento': null,
-          },
-          conflictAlgorithm: ConflictAlgorithm.ignore);
-    } else {
-      // Garante que o nome/tipo estão corretos mesmo se o usuário editou
-      await database.update(
+      // 1. Cria ou atualiza a conta "Saldo"
+      final contaExistente = await database.query(
         'contas',
-        {'nome': 'Salário', 'tipo': 'corrente', 'cor': '22C55E'},
         where: 'id = ?',
         whereArgs: [_rendaContaId],
       );
-    }
+      if (contaExistente.isEmpty) {
+        await database.insert(
+            'contas',
+            {
+              'id': _rendaContaId,
+              'nome': 'Saldo',
+              'limite': 0,
+              'saldo': 0,
+              'saldo_inicial': 0,
+              'tipo': 'corrente',
+              'cor': '22C55E',
+              'icone': 'salario',
+              'dia_vencimento': null,
+              'dia_fechamento': null,
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      } else {
+        await database.update(
+          'contas',
+          {'nome': 'Saldo', 'tipo': 'corrente', 'cor': '22C55E'},
+          where: 'id = ?',
+          whereArgs: [_rendaContaId],
+        );
+      }
 
-    // 2. Remove a transação recorrente anterior de renda (se existir)
-    await database.delete(
-      'transacoes',
-      where: 'banco = ? AND tipo = ? AND recorrencia = ?',
-      whereArgs: [_rendaContaId, 0 /* entrada */, 2 /* mensal */],
-    );
-
-    // 3. Calcula a data da primeira ocorrência sempre no mês atual,
-    // garantindo que a recorrência mensal cubra o mês corrente e todos os seguintes.
-    final now = DateTime.now();
-    DateTime primeiraData;
-    if (diaFixo != null) {
-      primeiraData = DateTime(now.year, now.month, diaFixo.clamp(1, 28));
-    } else {
-      final n = nthDiaUtil ?? 5;
-      primeiraData = _nthWeekday(now.year, now.month, n);
-    }
-
-    // 4. Insere a transação recorrente mensal
-    final txId = 'renda_base_tx';
-    await database.insert(
+      await database.delete(
         'transacoes',
-        {
-          'id': txId,
-          'valor': valor,
-          'banco': _rendaContaId,
-          'parcelas': 1,
-          'primeira_parcela': primeiraData.toIso8601String(),
-          'categoria': 'Salário',
-          'tipo': 0, // TipoTransacao.entrada
-          'descricao': 'Renda mensal base',
-          'recorrencia': 2, // Recorrencia.mensal
-          'recorrencia_grupo_id': null,
-        },
-        conflictAlgorithm: ConflictAlgorithm.replace);
+        where: 'banco = ? AND tipo IN (?, ?) AND recorrencia = ?',
+        whereArgs: [
+          _rendaContaId,
+          TipoTransacao.entrada.index,
+          TipoTransacao.receita.index,
+          Recorrencia.mensal.index,
+        ],
+      );
 
-    // 5. Persiste a configuração
-    await setConfig('receita_base', valor.toString());
-    await setConfig('receita_base_dia_fixo', diaFixo?.toString() ?? '');
-    await setConfig('receita_base_dia_util', nthDiaUtil?.toString() ?? '');
+      final now = DateTime.now();
+      DateTime primeiraData;
+      if (diaFixo != null) {
+        primeiraData = DateTime(now.year, now.month, diaFixo.clamp(1, 28));
+      } else {
+        final n = nthDiaUtil ?? 5;
+        primeiraData = _nthWeekday(now.year, now.month, n);
+      }
 
-    // 6. Recalcula o saldo da conta
-    await _recalcularSaldoConta(_rendaContaId);
+      await database.insert(
+          'transacoes',
+          {
+            'id': 'renda_base_tx',
+            'valor': valor,
+            'banco': _rendaContaId,
+            'parcelas': 1,
+            'primeira_parcela': primeiraData.toIso8601String(),
+            'categoria': 'Salário',
+            'tipo': TipoTransacao.receita.index,
+            'descricao': 'Renda mensal base',
+            'recorrencia': Recorrencia.mensal.index,
+            'recorrencia_grupo_id': null,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace);
+
+      await setConfig('receita_base', valor.toString());
+      await setConfig('receita_base_dia_fixo', diaFixo?.toString() ?? '');
+      await setConfig('receita_base_dia_util', nthDiaUtil?.toString() ?? '');
+      await _recalcularSaldoConta(_rendaContaId);
+    });
   }
 
   /// Remove a conta-salário e todas as transações vinculadas.
   static Future<void> removerRendaBase() async {
-    final database = await db;
-    await database
-        .delete('transacoes', where: 'banco = ?', whereArgs: [_rendaContaId]);
-    await database
-        .delete('contas', where: 'id = ?', whereArgs: [_rendaContaId]);
-    await setConfig('receita_base', '');
-    await setConfig('receita_base_dia_fixo', '');
-    await setConfig('receita_base_dia_util', '');
+    await _runCriticalWrite('removerRendaBase', () async {
+      final database = await db;
+      await database
+          .delete('transacoes', where: 'banco = ?', whereArgs: [_rendaContaId]);
+      await database
+          .delete('contas', where: 'id = ?', whereArgs: [_rendaContaId]);
+      await setConfig('receita_base', '');
+      await setConfig('receita_base_dia_fixo', '');
+      await setConfig('receita_base_dia_util', '');
+    });
+  }
+
+  static Future<void> clearTransactionsData() async {
+    await _runCriticalWrite('clearTransactionsData', () async {
+      final database = await db;
+      await database.transaction((txn) async {
+        await txn.delete('recorrencia_excecoes');
+        await txn.delete('transacoes');
+      });
+
+      final contas = await getContas();
+      for (final conta in contas) {
+        await _recalcularSaldoConta(conta.id);
+      }
+    });
   }
 }

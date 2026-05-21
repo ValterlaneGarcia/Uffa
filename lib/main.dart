@@ -55,7 +55,7 @@ class _FinanceAppState extends State<FinanceApp> {
   Widget build(BuildContext context) {
     final primary = AppState.instance.primaryColor;
     return MaterialApp(
-      title: 'FinanceApp',
+      title: 'Uffa',
       debugShowCheckedModeBanner: false,
       locale: const Locale('pt', 'BR'),
       themeMode: AppState.instance.themeMode,

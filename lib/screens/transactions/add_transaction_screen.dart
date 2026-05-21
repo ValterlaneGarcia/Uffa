@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/conta.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/category_repository.dart';
+import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
@@ -23,12 +25,16 @@ class AddTransactionScreen extends StatefulWidget {
 }
 
 class _AddTransactionScreenState extends State<AddTransactionScreen> {
+  static const _accountRepository = AccountRepository.instance;
+  static const _categoryRepository = CategoryRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   late bool _isDespesa;
   bool _isTransferencia = false;
   String? _contaDestinoId;
   final _valorCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   DateTime _date = DateTime.now();
+  DateTime _recurrenceDate = DateTime.now();
   String _categoria = 'Alimentação';
   String? _contaId;
   Recorrencia _recorrencia = Recorrencia.nenhuma;
@@ -36,6 +42,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   bool _saving = false;
   List<Conta> _contas = [];
   List<Map<String, dynamic>> _categoriaRows = [];
+
+  Conta? get _contaSelecionada =>
+      _contas.where((c) => c.id == _contaId).firstOrNull;
+  bool get _contaSelecionadaEhCredito => _contaSelecionada?.tipo == 'credito';
 
   @override
   void initState() {
@@ -47,6 +57,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       _valorCtrl.text = t.valor.abs().toStringAsFixed(2).replaceAll('.', ',');
       _descCtrl.text = t.descricao ?? '';
       _date = t.primeiraParcela;
+      _recurrenceDate = t.recorrenciaDataBase ?? t.primeiraParcela;
       _categoria = t.categoria;
       _contaId = t.banco;
       _recorrencia = t.recorrencia;
@@ -57,7 +68,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Future<void> _loadCategorias() async {
-    final rows = await AppDB.getCategorias();
+    final rows = await _categoryRepository.getAll();
     if (mounted) {
       setState(() => _categoriaRows = rows);
       CategoriaHelper.loadFromRows(rows);
@@ -65,16 +76,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Future<void> _loadContas() async {
-    final c = await AppDB.getContas();
+    final c = await _accountRepository.getAll();
     setState(() {
       _contas = c;
       // For income (receita), credit accounts are not allowed
       // Set default account: if receita, skip credit accounts
       if (_contaId == null) {
-        final contasValidas = _isDespesa
-            ? c
-            : c.where((ct) => ct.tipo != 'credito').toList();
+        final contasValidas =
+            _isDespesa ? c : c.where((ct) => ct.tipo != 'credito').toList();
         _contaId = contasValidas.isNotEmpty ? contasValidas.first.id : null;
+      }
+      if (!_contaSelecionadaEhCredito) {
+        _parcelas = 1;
       }
     });
   }
@@ -95,14 +108,18 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   void _onToggleTipo(bool isDespesa) {
     setState(() {
       _isDespesa = isDespesa;
+      _isTransferencia = false;
       // Always reset recorrencia when switching type to avoid unintended recurrence
       _recorrencia = Recorrencia.nenhuma;
       if (!isDespesa) {
         // If selected account is credit, deselect it
-        final selectedConta = _contas.where((c) => c.id == _contaId).firstOrNull;
+        final selectedConta =
+            _contas.where((c) => c.id == _contaId).firstOrNull;
         if (selectedConta?.tipo == 'credito') {
-          final nonCreditContas = _contas.where((c) => c.tipo != 'credito').toList();
-          _contaId = nonCreditContas.isNotEmpty ? nonCreditContas.first.id : null;
+          final nonCreditContas =
+              _contas.where((c) => c.tipo != 'credito').toList();
+          _contaId =
+              nonCreditContas.isNotEmpty ? nonCreditContas.first.id : null;
         }
         // Default to first receita category available
         final receitaCats = _categoriaRows
@@ -116,9 +133,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         final despesaCats = _categoriaRows
             .where((r) => r['tipo'] == 'despesa' || r['tipo'] == 'ambos')
             .toList();
-        final nomeDespesas = despesaCats.map((r) => r['nome'] as String).toList();
+        final nomeDespesas =
+            despesaCats.map((r) => r['nome'] as String).toList();
         if (!nomeDespesas.contains(_categoria)) {
-          _categoria = nomeDespesas.isNotEmpty ? nomeDespesas.first : 'Alimentação';
+          _categoria =
+              nomeDespesas.isNotEmpty ? nomeDespesas.first : 'Alimentação';
         }
       }
     });
@@ -138,7 +157,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       appBar: AppBar(
         backgroundColor: context.appSurface,
         leading: IconButton(
-          icon: Icon(Icons.arrow_back_ios_new, size: 18, color: context.textPrimary),
+          icon: Icon(Icons.arrow_back_ios_new,
+              size: 18, color: context.textPrimary),
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
@@ -173,7 +193,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             if (!_isTransferencia) const SizedBox(height: 16),
             const SizedBox(height: 32),
             GradientButton(
-              label: widget.editando != null ? 'Salvar alterações' : 'Adicionar transação',
+              label: widget.editando != null
+                  ? 'Salvar alterações'
+                  : 'Adicionar transação',
               onPressed: _saving ? null : _save,
               loading: _saving,
               icon: Icons.check_rounded,
@@ -228,14 +250,19 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   _recorrencia = Recorrencia.nenhuma;
                   _parcelas = 1;
                   // Transferência só pode sair de conta não-crédito
-                  final contaAtual = _contas.where((c) => c.id == _contaId).firstOrNull;
+                  final contaAtual =
+                      _contas.where((c) => c.id == _contaId).firstOrNull;
                   if (contaAtual?.tipo == 'credito') {
-                    final naoCredito = _contas.where((c) => c.tipo != 'credito').toList();
-                    _contaId = naoCredito.isNotEmpty ? naoCredito.first.id : null;
+                    final naoCredito =
+                        _contas.where((c) => c.tipo != 'credito').toList();
+                    _contaId =
+                        naoCredito.isNotEmpty ? naoCredito.first.id : null;
                   }
                   // Limpar destino inválido (crédito)
                   if (_contaDestinoId != null) {
-                    final destino = _contas.where((c) => c.id == _contaDestinoId).firstOrNull;
+                    final destino = _contas
+                        .where((c) => c.id == _contaDestinoId)
+                        .firstOrNull;
                     if (destino?.tipo == 'credito') _contaDestinoId = null;
                   }
                 });
@@ -253,11 +280,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       children: [
         Text('Valor',
             style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: context.textSecondary)),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: context.textSecondary)),
         SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-              color: context.appSurface, borderRadius: BorderRadius.circular(12)),
+              color: context.appSurface,
+              borderRadius: BorderRadius.circular(12)),
           child: TextField(
             controller: _valorCtrl,
             keyboardType: TextInputType.numberWithOptions(decimal: true),
@@ -265,7 +295,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               FilteringTextInputFormatter.allow(RegExp(r'[0-9,.]'))
             ],
             style: TextStyle(
-                fontSize: 22, fontWeight: FontWeight.w700, color: context.textPrimary),
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: context.textPrimary),
             decoration: InputDecoration(
               prefixText: 'R\$ ',
               prefixStyle: TextStyle(
@@ -326,7 +358,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               conta?.nome ?? 'Selecionar conta',
               style: TextStyle(
                   fontSize: 16,
-                  color: conta != null ? context.textPrimary : context.textSecondary),
+                  color: conta != null
+                      ? context.textPrimary
+                      : context.textSecondary),
             ),
           ),
           Icon(Icons.keyboard_arrow_down, color: context.textSecondary),
@@ -347,7 +381,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             .toList();
         if (contasDisponiveis.isEmpty) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Nenhuma conta disponível como destino')),
+            const SnackBar(
+                content: Text('Nenhuma conta disponível como destino')),
           );
           return;
         }
@@ -373,7 +408,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     title: Text(c.nome,
                         style: TextStyle(color: context.textPrimary)),
                     subtitle: Text(c.tipo,
-                        style: TextStyle(color: context.textSecondary, fontSize: 12)),
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 12)),
                     leading: Icon(Icons.account_balance_wallet_outlined,
                         color: context.textSecondary),
                     trailing: _contaDestinoId == c.id
@@ -396,7 +432,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               conta?.nome ?? 'Selecionar conta de destino',
               style: TextStyle(
                   fontSize: 16,
-                  color: conta != null ? context.textPrimary : context.textSecondary),
+                  color: conta != null
+                      ? context.textPrimary
+                      : context.textSecondary),
             ),
           ),
           Icon(Icons.keyboard_arrow_down, color: context.textSecondary),
@@ -407,7 +445,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   Widget _buildDateField() {
     return _FormField(
-      label: 'Data',
+      label:
+          _recorrencia == Recorrencia.nenhuma ? 'Data' : 'Data do lançamento',
       onTap: _pickDate,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -427,11 +466,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       children: [
         Text('Descrição (opcional)',
             style: TextStyle(
-                fontSize: 13, fontWeight: FontWeight.w600, color: context.textSecondary)),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: context.textSecondary)),
         SizedBox(height: 8),
         Container(
           decoration: BoxDecoration(
-              color: context.appSurface, borderRadius: BorderRadius.circular(12)),
+              color: context.appSurface,
+              borderRadius: BorderRadius.circular(12)),
           child: TextField(
             controller: _descCtrl,
             style: TextStyle(fontSize: 16, color: context.textPrimary),
@@ -455,7 +497,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       child: Column(
         children: [
           // Installments (expenses only)
-          if (_isDespesa) ...[
+          if (_isDespesa && _contaSelecionadaEhCredito) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(
@@ -465,9 +507,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Parcelado',
-                          style: TextStyle(fontSize: 15, color: context.textPrimary)),
+                          style: TextStyle(
+                              fontSize: 15, color: context.textPrimary)),
                       Text('Dividir em parcelas',
-                          style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                          style: TextStyle(
+                              fontSize: 12, color: context.textSecondary)),
                     ],
                   ),
                   Row(
@@ -513,9 +557,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('Recorrência',
-                        style: TextStyle(fontSize: 15, color: context.textPrimary)),
+                        style: TextStyle(
+                            fontSize: 15, color: context.textPrimary)),
                     Text('Repetir automaticamente',
-                        style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                        style: TextStyle(
+                            fontSize: 12, color: context.textSecondary)),
                   ],
                 ),
                 DropdownButton<Recorrencia>(
@@ -527,41 +573,131 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                       color: context.primary,
                       fontWeight: FontWeight.w600),
                   items: const [
-                    DropdownMenuItem(value: Recorrencia.nenhuma, child: Text('Nenhuma')),
-                    DropdownMenuItem(value: Recorrencia.semanal, child: Text('Semanal')),
-                    DropdownMenuItem(value: Recorrencia.mensal, child: Text('Mensal')),
-                    DropdownMenuItem(value: Recorrencia.anual, child: Text('Anual')),
+                    DropdownMenuItem(
+                        value: Recorrencia.nenhuma, child: Text('Nenhuma')),
+                    DropdownMenuItem(
+                        value: Recorrencia.semanal, child: Text('Semanal')),
+                    DropdownMenuItem(
+                        value: Recorrencia.mensal, child: Text('Mensal')),
+                    DropdownMenuItem(
+                        value: Recorrencia.anual, child: Text('Anual')),
                   ],
-                  onChanged: (v) => setState(() => _recorrencia = v!),
+                  onChanged: (v) => setState(() {
+                    _recorrencia = v!;
+                    if (_recorrencia != Recorrencia.nenhuma) {
+                      _recurrenceDate = _date;
+                    }
+                  }),
                 ),
               ],
             ),
           ),
+          if (_recorrencia != Recorrencia.nenhuma) ...[
+            const Divider(height: 1),
+            _buildRecurrenceDetails(),
+          ],
+        ],
+      ),
+    );
+  }
 
-          // Notification reminder
-          Divider(height: 1),
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  Widget _buildRecurrenceDetails() {
+    const weekLabels = <int, String>{
+      DateTime.monday: 'Seg',
+      DateTime.tuesday: 'Ter',
+      DateTime.wednesday: 'Qua',
+      DateTime.thursday: 'Qui',
+      DateTime.friday: 'Sex',
+      DateTime.saturday: 'Sab',
+      DateTime.sunday: 'Dom',
+    };
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Base da recorrência',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: context.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'O lançamento usa a data acima. A recorrência usa a base abaixo.',
+            style: TextStyle(fontSize: 12, color: context.textSecondary),
+          ),
+          const SizedBox(height: 10),
+          if (_recorrencia == Recorrencia.semanal)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: weekLabels.entries.map((entry) {
+                final selected = _recurrenceDate.weekday == entry.key;
+                return ChoiceChip(
+                  label: Text(entry.value),
+                  selected: selected,
+                  onSelected: (_) => _setRecurringWeekday(entry.key),
+                );
+              }).toList(),
+            ),
+          if (_recorrencia == Recorrencia.mensal)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading:
+                  Icon(Icons.calendar_month_outlined, color: context.primary),
+              title: Text('Todo dia ${_recurrenceDate.day}',
+                  style: TextStyle(color: context.textPrimary)),
+              subtitle: Text(
+                'A recorrência mensal seguirá este dia.',
+                style: TextStyle(color: context.textSecondary),
+              ),
+              trailing: Icon(Icons.edit_calendar_outlined,
+                  color: context.textSecondary),
+              onTap: _pickRecurringDayOfMonth,
+            ),
+          if (_recorrencia == Recorrencia.anual)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading:
+                  Icon(Icons.event_repeat_outlined, color: context.primary),
+              title: Text(
+                'Todo ${dtFmt.format(_recurrenceDate)}',
+                style: TextStyle(color: context.textPrimary),
+              ),
+              subtitle: Text(
+                'A recorrência anual usará este dia e mês.',
+                style: TextStyle(color: context.textSecondary),
+              ),
+              trailing: Icon(Icons.edit_calendar_outlined,
+                  color: context.textSecondary),
+              onTap: _pickRecurrenceDate,
+            ),
+          const SizedBox(height: 4),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: context.appCardLight,
+              borderRadius: BorderRadius.circular(12),
+            ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.notifications_outlined,
-                    color: context.textSecondary, size: 20),
-                SizedBox(width: 12),
+                Icon(Icons.notifications_active_outlined,
+                    size: 18, color: context.primary),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Lembrete de pagamento',
-                      style: TextStyle(fontSize: 14, color: context.textSecondary)),
-                ),
-                Switch(
-                  value: false,
-                  onChanged: (_) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Notificações serão configuradas em breve'),
-                        backgroundColor: context.appSurface,
-                      ),
-                    );
-                  },
-                  activeColor: context.primary,
+                  child: Text(
+                    'Recorrências usam os lembretes globais do app quando as notificações estiverem ativas.',
+                    style: TextStyle(
+                      color: context.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
                 ),
               ],
             ),
@@ -583,8 +719,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     final catNames = cats.isNotEmpty
         ? cats.map((r) => r['nome'] as String).toList()
         : (_isDespesa
-            ? CategoriaHelper.todas.where((c) =>
-                !['Salário', 'Freelance', 'Investimentos'].contains(c)).toList()
+            ? CategoriaHelper.todas
+                .where((c) =>
+                    !['Salário', 'Freelance', 'Investimentos'].contains(c))
+                .toList()
             : ['Salário', 'Freelance', 'Investimentos', 'Outros']);
 
     await showModalBottomSheet(
@@ -619,17 +757,13 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     },
                     child: AnimatedContainer(
                       duration: Duration(milliseconds: 150),
-                      padding: EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       decoration: BoxDecoration(
-                        color: isSelected
-                            ? color
-                            : context.appCardLight,
+                        color: isSelected ? color : context.appCardLight,
                         borderRadius: BorderRadius.circular(30),
                         border: Border.all(
-                          color: isSelected
-                              ? color
-                              : Colors.transparent,
+                          color: isSelected ? color : Colors.transparent,
                         ),
                       ),
                       child: Row(
@@ -637,9 +771,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                         children: [
                           Icon(icon,
                               size: 16,
-                              color: isSelected
-                                  ? Colors.white
-                                  : color),
+                              color: isSelected ? Colors.white : color),
                           SizedBox(width: 6),
                           Text(
                             cat,
@@ -664,6 +796,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       }),
     );
   }
+
   Future<void> _pickConta() async {
     final contasParaExibir = _contasValidas;
 
@@ -700,31 +833,37 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               ),
             if (contasParaExibir.isNotEmpty)
               ...contasParaExibir.map((c) {
-              final isSelected = _contaId == c.id;
-              return ListTile(
-                onTap: () {
-                  setState(() => _contaId = c.id);
-                  Navigator.pop(context);
-                },
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: context.appCardLight,
-                    borderRadius: BorderRadius.circular(10),
+                final isSelected = _contaId == c.id;
+                return ListTile(
+                  onTap: () {
+                    setState(() {
+                      _contaId = c.id;
+                      if (!_contaSelecionadaEhCredito) {
+                        _parcelas = 1;
+                      }
+                    });
+                    Navigator.pop(context);
+                  },
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: context.appCardLight,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.account_balance_wallet_outlined,
+                        color: context.textSecondary, size: 20),
                   ),
-                  child: Icon(Icons.account_balance_wallet_outlined,
-                      color: context.textSecondary, size: 20),
-                ),
-                title: Text(c.nome,
-                    style: TextStyle(color: context.textPrimary)),
-                subtitle: Text(c.tipo,
-                    style: TextStyle(color: context.textSecondary, fontSize: 12)),
-                trailing: isSelected
-                    ? Icon(Icons.check_circle, color: context.primary)
-                    : null,
-              );
-            }),
+                  title: Text(c.nome,
+                      style: TextStyle(color: context.textPrimary)),
+                  subtitle: Text(c.tipo,
+                      style: TextStyle(
+                          color: context.textSecondary, fontSize: 12)),
+                  trailing: isSelected
+                      ? Icon(Icons.check_circle, color: context.primary)
+                      : null,
+                );
+              }),
             const SizedBox(height: 8),
           ],
         ),
@@ -733,22 +872,109 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 
   Future<void> _pickDate() async {
+    final d = await _showStyledDatePicker(_date);
+    if (d != null) setState(() => _date = d);
+  }
+
+  Future<void> _pickRecurrenceDate() async {
+    final d = await _showStyledDatePicker(_recurrenceDate);
+    if (d != null) setState(() => _recurrenceDate = d);
+  }
+
+  Future<DateTime?> _showStyledDatePicker(DateTime initialDate) async {
     final d = await showDatePicker(
       context: context,
-      initialDate: _date,
+      initialDate: initialDate,
       firstDate: DateTime(2020),
       lastDate: DateTime(2030),
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
-          colorScheme: ColorScheme.dark(
-            primary: context.primary,
-            surface: context.appCard,
+          colorScheme: Theme.of(ctx).colorScheme.copyWith(
+                primary: context.primary,
+                onPrimary: Colors.white,
+                surface: context.appSurface,
+                onSurface: context.textPrimary,
+              ),
+          dialogBackgroundColor: context.appSurface,
+          datePickerTheme: DatePickerThemeData(
+            backgroundColor: context.appSurface,
+            headerBackgroundColor: context.primary,
+            headerForegroundColor: Colors.white,
+            dayForegroundColor:
+                WidgetStatePropertyAll<Color>(context.textPrimary),
+            todayForegroundColor:
+                WidgetStatePropertyAll<Color>(context.primary),
           ),
         ),
         child: child!,
       ),
     );
-    if (d != null) setState(() => _date = d);
+    return d;
+  }
+
+  Future<void> _pickRecurringDayOfMonth() async {
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      backgroundColor: context.appSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => GridView.builder(
+        shrinkWrap: true,
+        padding: const EdgeInsets.all(20),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 7,
+          mainAxisSpacing: 8,
+          crossAxisSpacing: 8,
+          childAspectRatio: 1,
+        ),
+        itemCount: 31,
+        itemBuilder: (_, index) {
+          final day = index + 1;
+          final selected = _recurrenceDate.day == day;
+          return GestureDetector(
+            onTap: () => Navigator.pop(context, day),
+            child: Container(
+              decoration: BoxDecoration(
+                color: selected ? context.primary : context.appCardLight,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                '$day',
+                style: TextStyle(
+                  color: selected ? Colors.white : context.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (picked != null) {
+      _setRecurringMonthDay(picked);
+    }
+  }
+
+  void _setRecurringMonthDay(int day) {
+    final lastDay =
+        DateTime(_recurrenceDate.year, _recurrenceDate.month + 1, 0).day;
+    setState(() {
+      _recurrenceDate = DateTime(
+        _recurrenceDate.year,
+        _recurrenceDate.month,
+        day.clamp(1, lastDay),
+      );
+    });
+  }
+
+  void _setRecurringWeekday(int weekday) {
+    var cursor = _recurrenceDate;
+    while (cursor.weekday != weekday) {
+      cursor = cursor.add(const Duration(days: 1));
+    }
+    setState(() => _recurrenceDate = cursor);
   }
 
   Future<void> _save() async {
@@ -789,7 +1015,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (destino?.tipo == 'credito') {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Cartão de crédito não pode ser destino de transferência'),
+            content:
+                Text('Cartão de crédito não pode ser destino de transferência'),
             backgroundColor: AppColors.red,
           ),
         );
@@ -800,7 +1027,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (origem?.tipo == 'credito') {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Cartão de crédito não pode ser origem de transferência'),
+            content:
+                Text('Cartão de crédito não pode ser origem de transferência'),
             backgroundColor: AppColors.red,
           ),
         );
@@ -814,7 +1042,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (selectedConta?.tipo == 'credito') {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Cartões de crédito não aceitam lançamentos de entrada'),
+            content:
+                Text('Cartões de crédito não aceitam lançamentos de entrada'),
             backgroundColor: AppColors.red,
           ),
         );
@@ -834,7 +1063,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         primeiraParcela: _date,
         categoria: 'Transferência',
         tipo: TipoTransacao.saldo,
-        descricao: _descCtrl.text.trim().isEmpty ? 'Transferência' : _descCtrl.text.trim(),
+        descricao: _descCtrl.text.trim().isEmpty
+            ? 'Transferência'
+            : _descCtrl.text.trim(),
         recorrencia: Recorrencia.nenhuma,
         recorrenciaGrupoId: grupoId,
       );
@@ -845,12 +1076,16 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         primeiraParcela: _date,
         categoria: 'Transferência',
         tipo: TipoTransacao.saldo,
-        descricao: _descCtrl.text.trim().isEmpty ? 'Transferência' : _descCtrl.text.trim(),
+        descricao: _descCtrl.text.trim().isEmpty
+            ? 'Transferência'
+            : _descCtrl.text.trim(),
         recorrencia: Recorrencia.nenhuma,
         recorrenciaGrupoId: grupoId,
       );
-      await AppDB.insertTransacao(saida);
-      await AppDB.insertTransacao(entrada);
+      await _transactionRepository.insertTransfer(
+        saida: saida,
+        entrada: entrada,
+      );
     } else {
       final t = Transacao(
         id: widget.editando?.id,
@@ -858,15 +1093,17 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         banco: _contaId ?? 'geral',
         parcelas: _recorrencia != Recorrencia.nenhuma ? 1 : _parcelas,
         primeiraParcela: _date,
+        recorrenciaDataBase:
+            _recorrencia != Recorrencia.nenhuma ? _recurrenceDate : null,
         categoria: _categoria,
         tipo: _isDespesa ? TipoTransacao.saida : TipoTransacao.receita,
         descricao: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
         recorrencia: _recorrencia,
       );
       if (widget.editando != null) {
-        await AppDB.updateTransacao(t);
+        await _transactionRepository.save(t, isUpdate: true);
       } else {
-        await AppDB.insertTransacao(t);
+        await _transactionRepository.save(t);
       }
     }
 
