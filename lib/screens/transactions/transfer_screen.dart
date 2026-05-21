@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/conta.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
@@ -18,6 +19,8 @@ class TransferScreen extends StatefulWidget {
 }
 
 class _TransferScreenState extends State<TransferScreen> {
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   final _valorCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   DateTime _date = DateTime.now();
@@ -48,7 +51,7 @@ class _TransferScreenState extends State<TransferScreen> {
   }
 
   Future<void> _loadContas() async {
-    final c = await AppDB.getContas();
+    final c = await _accountRepository.getAll();
     setState(() {
       _contas = c;
       // Se não há origem pré-definida, seleciona a primeira válida
@@ -65,8 +68,7 @@ class _TransferScreenState extends State<TransferScreen> {
 
   Future<void> _pickConta({required bool isOrigem}) async {
     final excludeId = isOrigem ? _destinoId : _origemId;
-    final lista =
-        _contasValidas.where((c) => c.id != excludeId).toList();
+    final lista = _contasValidas.where((c) => c.id != excludeId).toList();
 
     if (lista.isEmpty) {
       _snack('Nenhuma conta disponível para selecionar');
@@ -178,9 +180,8 @@ class _TransferScreenState extends State<TransferScreen> {
     setState(() => _saving = true);
 
     final grupoId = 'transf_${DateTime.now().millisecondsSinceEpoch}';
-    final desc = _descCtrl.text.trim().isEmpty
-        ? 'Transferência'
-        : _descCtrl.text.trim();
+    final desc =
+        _descCtrl.text.trim().isEmpty ? 'Transferência' : _descCtrl.text.trim();
 
     final saida = Transacao(
       valor: -valor,
@@ -205,8 +206,7 @@ class _TransferScreenState extends State<TransferScreen> {
       recorrenciaGrupoId: grupoId,
     );
 
-    await AppDB.insertTransacao(saida);
-    await AppDB.insertTransacao(entrada);
+    await _transactionRepository.insertTransfer(saida: saida, entrada: entrada);
 
     setState(() => _saving = false);
     AppState.notify();
@@ -231,8 +231,8 @@ class _TransferScreenState extends State<TransferScreen> {
             ),
             backgroundColor: AppColors.green,
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
             duration: const Duration(seconds: 2),
           ),
@@ -315,8 +315,8 @@ class _TransferScreenState extends State<TransferScreen> {
                       fontWeight: FontWeight.w800,
                       color: AppColors.blue),
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 18),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
                   hintText: '0,00',
                   hintStyle: TextStyle(color: context.textSecondary),
                 ),
@@ -381,8 +381,8 @@ class _TransferScreenState extends State<TransferScreen> {
             GestureDetector(
               onTap: _pickDate,
               child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 16, vertical: 14),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
                   color: context.appSurface,
                   borderRadius: BorderRadius.circular(14),
@@ -413,8 +413,8 @@ class _TransferScreenState extends State<TransferScreen> {
                 style: TextStyle(fontSize: 16, color: context.textPrimary),
                 decoration: InputDecoration(
                   border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16, vertical: 16),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                   hintText: 'Ex: Pagamento de fatura',
                   hintStyle: TextStyle(color: context.textSecondary),
                 ),
@@ -521,8 +521,8 @@ class _ContaRow extends StatelessWidget {
                   if (conta != null)
                     Text(
                       'Saldo: ${fmtBRL(conta!.saldo)}',
-                      style: TextStyle(
-                          color: context.textSecondary, fontSize: 12),
+                      style:
+                          TextStyle(color: context.textSecondary, fontSize: 12),
                     ),
                 ],
               ),
@@ -586,9 +586,8 @@ class _ContaPicker extends StatelessWidget {
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: isSelected
-                      ? cor.withOpacity(0.1)
-                      : context.appCardLight,
+                  color:
+                      isSelected ? cor.withOpacity(0.1) : context.appCardLight,
                   borderRadius: BorderRadius.circular(12),
                   border: Border.all(
                     color: isSelected ? cor : Colors.transparent,
@@ -618,14 +617,12 @@ class _ContaPicker extends StatelessWidget {
                                   fontSize: 15)),
                           Text('Saldo: ${fmtBRL(c.saldo)}',
                               style: TextStyle(
-                                  color: context.textSecondary,
-                                  fontSize: 12)),
+                                  color: context.textSecondary, fontSize: 12)),
                         ],
                       ),
                     ),
                     if (isSelected)
-                      Icon(Icons.check_circle_rounded,
-                          color: cor, size: 20),
+                      Icon(Icons.check_circle_rounded, color: cor, size: 20),
                   ],
                 ),
               ),

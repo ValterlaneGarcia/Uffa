@@ -165,6 +165,11 @@ class MonthSelectorPill extends StatelessWidget {
     'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
   ];
 
+  static const List<String> mesesAbrev = [
+    'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
+    'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+  ];
+
   const MonthSelectorPill({
     super.key,
     required this.selectedMonth,
@@ -176,7 +181,7 @@ class MonthSelectorPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label =
-        '${meses[selectedMonth.month - 1]} ▾  ${selectedMonth.year}';
+        '${mesesAbrev[selectedMonth.month - 1]} ${selectedMonth.year}';
     return Container(
       decoration: BoxDecoration(
         color: context.appCardLight,
@@ -187,9 +192,9 @@ class MonthSelectorPill extends StatelessWidget {
         children: [
           IconButton(
             icon: Icon(Icons.chevron_left,
-                color: context.textSecondary, size: 20),
+                color: context.textSecondary, size: 18),
             onPressed: onPrev,
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             padding: EdgeInsets.zero,
           ),
           GestureDetector(
@@ -198,16 +203,16 @@ class MonthSelectorPill extends StatelessWidget {
               label,
               style: TextStyle(
                 color: context.textPrimary,
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
           ),
           IconButton(
             icon: Icon(Icons.chevron_right,
-                color: context.textSecondary, size: 20),
+                color: context.textSecondary, size: 18),
             onPressed: onNext,
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             padding: EdgeInsets.zero,
           ),
         ],

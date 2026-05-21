@@ -29,6 +29,7 @@ const _kGracePeriod = Duration(minutes: 5);
 
 class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   int _currentIndex = 0;
+  final Set<int> _loadedTabs = {0};
 
   bool _locked = false;
   bool _authenticating = false;
@@ -46,14 +47,14 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    AppState.instance.addListener(_onDataChanged);
+    AppState.dataChanges.addListener(_onDataChanged);
     _checkOnboarding();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    AppState.instance.removeListener(_onDataChanged);
+    AppState.dataChanges.removeListener(_onDataChanged);
     _notificationSyncDebounce?.cancel();
     super.dispose();
   }
@@ -157,7 +158,7 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
     if (mounted) setState(() => _authenticating = true);
     try {
       final authenticated = await _localAuth.authenticate(
-        localizedReason: 'Confirme sua identidade para acessar o FinanceApp',
+        localizedReason: 'Confirme sua identidade para acessar o Uffa',
         options: const AuthenticationOptions(
           biometricOnly: false,
           stickyAuth: true,
@@ -208,19 +209,31 @@ class _MainShellState extends State<MainShell> with WidgetsBindingObserver {
       backgroundColor: AppColors.background,
       body: IndexedStack(
         index: _currentIndex,
-        children: [
-          DashboardScreen(key: _screenKeys[0]),
-          TransactionsScreen(key: _screenKeys[1]),
-          AccountsScreen(key: _screenKeys[2]),
-          PlanningScreen(key: _screenKeys[3]),
-          SettingsScreen(key: _screenKeys[4]),
-        ],
+        children: List.generate(5, _buildTab),
       ),
       bottomNavigationBar: _BottomNav(
         currentIndex: _currentIndex,
-        onTap: (i) => setState(() => _currentIndex = i),
+        onTap: (i) => setState(() {
+          _currentIndex = i;
+          _loadedTabs.add(i);
+        }),
       ),
     );
+  }
+
+  Widget _buildTab(int index) {
+    if (!_loadedTabs.contains(index)) {
+      return const SizedBox.shrink();
+    }
+
+    return switch (index) {
+      0 => DashboardScreen(key: _screenKeys[0]),
+      1 => TransactionsScreen(key: _screenKeys[1]),
+      2 => AccountsScreen(key: _screenKeys[2]),
+      3 => PlanningScreen(key: _screenKeys[3]),
+      4 => SettingsScreen(key: _screenKeys[4]),
+      _ => const SizedBox.shrink(),
+    };
   }
 }
 
@@ -256,7 +269,7 @@ class _LockScreen extends StatelessWidget {
               ),
               const SizedBox(height: 28),
               const Text(
-                'FinanceApp',
+                'Uffa',
                 style: TextStyle(
                   color: AppColors.textPrimaryDark,
                   fontSize: 26,

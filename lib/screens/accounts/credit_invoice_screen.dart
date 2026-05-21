@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/conta.dart';
 import '../../data/models/transaction.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
@@ -18,6 +19,7 @@ class CreditInvoiceScreen extends StatefulWidget {
 }
 
 class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
+  static const _transactionRepository = TransactionRepository.instance;
   List<Transacao> _transacoes = [];
   bool _loading = true;
 
@@ -29,12 +31,12 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
     super.initState();
     _mesAtual = _faturaAtual();
     _load();
-    AppState.instance.addListener(_load);
+    AppState.dataChanges.addListener(_load);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_load);
+    AppState.dataChanges.removeListener(_load);
     super.dispose();
   }
 
@@ -48,19 +50,10 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
     return DateTime(now.year, now.month);
   }
 
-  (DateTime inicio, DateTime fim) _periodoFatura(DateTime mesVencimento) {
-    final fechamento = widget.conta.diaFechamento ?? 1;
-    final inicio = DateTime(mesVencimento.year, mesVencimento.month, fechamento);
-    final fim = fechamento > 1
-        ? DateTime(mesVencimento.year, mesVencimento.month + 1, fechamento - 1)
-        : DateTime(mesVencimento.year, mesVencimento.month + 1, 0);
-    return (inicio, fim);
-  }
-
   Future<void> _load() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    final txs = await AppDB.getTransacoesByBanco(widget.conta.id);
+    final txs = await _transactionRepository.getByAccount(widget.conta.id);
     if (!mounted) return;
     setState(() {
       _transacoes = txs;
@@ -69,16 +62,9 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
   }
 
   List<Transacao> get _txDaFatura {
-    if (widget.conta.diaFechamento == null) {
-      return _transacoes.where((t) =>
-          t.primeiraParcela.year == _mesAtual.year &&
-          t.primeiraParcela.month == _mesAtual.month).toList();
-    }
-    final (inicio, fim) = _periodoFatura(_mesAtual);
     return _transacoes.where((t) {
       if (t.valor < 0) {
-        final d = t.primeiraParcela;
-        return !d.isBefore(inicio) && !d.isAfter(fim);
+        return t.valorNoMes(_mesAtual.year, _mesAtual.month) < 0;
       } else {
         // Pagamentos: filtrar pelo mês/ano da fatura
         return t.primeiraParcela.year == _mesAtual.year &&
@@ -92,20 +78,34 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
   List<Transacao> get _pagamentos =>
       _txDaFatura.where((t) => t.valor > 0).toList();
 
+  double _valorNaFatura(Transacao t) {
+    if (t.valor > 0) return t.valor;
+    return t.valorNoMes(_mesAtual.year, _mesAtual.month).abs();
+  }
+
+  int? _parcelaAtual(Transacao t) {
+    if (t.parcelas <= 1) return null;
+    final diff = (_mesAtual.year - t.primeiraParcela.year) * 12 +
+        (_mesAtual.month - t.primeiraParcela.month);
+    if (diff < 0 || diff >= t.parcelas) return null;
+    return diff + 1;
+  }
+
   double get _totalDespesas =>
-      _despesas.fold(0.0, (s, t) => s + t.valor.abs());
-  double get _totalPagamentos =>
-      _pagamentos.fold(0.0, (s, t) => s + t.valor);
+      _despesas.fold(0.0, (s, t) => s + _valorNaFatura(t));
+  double get _totalPagamentos => _pagamentos.fold(0.0, (s, t) => s + t.valor);
 
   /// Saldo restante da fatura = despesas - pagamentos já efetuados (nunca negativo)
-  double get _saldoFatura => (_totalDespesas - _totalPagamentos).clamp(0.0, double.infinity);
+  double get _saldoFatura =>
+      (_totalDespesas - _totalPagamentos).clamp(0.0, double.infinity);
 
   /// A fatura está fechada se a data de fechamento já passou para este mês.
   bool get _faturaFechada {
     final now = DateTime.now();
     final fechamento = widget.conta.diaFechamento;
     if (fechamento == null) return false;
-    final dataFechamento = DateTime(_mesAtual.year, _mesAtual.month, fechamento);
+    final dataFechamento =
+        DateTime(_mesAtual.year, _mesAtual.month, fechamento);
     return now.isAfter(dataFechamento);
   }
 
@@ -135,8 +135,18 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
 
   String get _labelMes {
     const meses = [
-      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+      'Janeiro',
+      'Fevereiro',
+      'Março',
+      'Abril',
+      'Maio',
+      'Junho',
+      'Julho',
+      'Agosto',
+      'Setembro',
+      'Outubro',
+      'Novembro',
+      'Dezembro'
     ];
     return 'Fatura de ${meses[_mesAtual.month - 1]} ${_mesAtual.year}';
   }
@@ -144,16 +154,29 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
   String get _labelPeriodo {
     if (widget.conta.diaFechamento == null) {
       const meses = [
-        'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-        'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'
+        'Jan',
+        'Fev',
+        'Mar',
+        'Abr',
+        'Mai',
+        'Jun',
+        'Jul',
+        'Ago',
+        'Set',
+        'Out',
+        'Nov',
+        'Dez'
       ];
       return '${meses[_mesAtual.month - 1]}/${_mesAtual.year}';
     }
     final fechamento = widget.conta.diaFechamento!;
-    final inicioOriginal = DateTime(_mesAtual.year, _mesAtual.month - 1, fechamento + 1);
+    final inicioOriginal =
+        DateTime(_mesAtual.year, _mesAtual.month - 1, fechamento + 1);
     final fimOriginal = DateTime(_mesAtual.year, _mesAtual.month, fechamento);
-    final dInicio = '${inicioOriginal.day.toString().padLeft(2, '0')}/${inicioOriginal.month.toString().padLeft(2, '0')}';
-    final dFim = '${fimOriginal.day.toString().padLeft(2, '0')}/${fimOriginal.month.toString().padLeft(2, '0')}';
+    final dInicio =
+        '${inicioOriginal.day.toString().padLeft(2, '0')}/${inicioOriginal.month.toString().padLeft(2, '0')}';
+    final dFim =
+        '${fimOriginal.day.toString().padLeft(2, '0')}/${fimOriginal.month.toString().padLeft(2, '0')}';
     return '$dInicio a $dFim · vence dia ${widget.conta.diaVencimento ?? fechamento}';
   }
 
@@ -197,8 +220,8 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
             backgroundColor: AppColors.green,
             duration: const Duration(seconds: 3),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
           ),
         );
@@ -221,7 +244,7 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
           slivers: [
             // ── SliverAppBar com cabeçalho da fatura ──────────────
             SliverAppBar(
-              expandedHeight: 300,
+              expandedHeight: 380,
               pinned: true,
               backgroundColor: cor,
               leading: IconButton(
@@ -256,9 +279,8 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                       colors: [cor, cor.withOpacity(0.7)],
                     ),
                   ),
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
+                  child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 80, 20, 16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -318,7 +340,9 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                                 fontWeight: FontWeight.w800),
                           ),
                           Text(
-                            _saldoFatura > 0 ? 'valor a pagar' : 'fatura quitada',
+                            _saldoFatura > 0
+                                ? 'valor a pagar'
+                                : 'fatura quitada',
                             style: const TextStyle(
                                 color: Colors.white70, fontSize: 13),
                           ),
@@ -342,7 +366,6 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                           ),
                         ],
                       ),
-                    ),
                   ),
                 ),
               ),
@@ -392,7 +415,11 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       sliver: SliverList(
                         delegate: SliverChildBuilderDelegate(
-                          (_, i) => _TxCard(tx: _despesas[i]),
+                          (_, i) => _TxCard(
+                            tx: _despesas[i],
+                            valorExibido: _valorNaFatura(_despesas[i]),
+                            parcelaAtual: _parcelaAtual(_despesas[i]),
+                          ),
                           childCount: _despesas.length,
                         ),
                       ),
@@ -412,7 +439,10 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
                   sliver: SliverList(
                     delegate: SliverChildBuilderDelegate(
-                      (_, i) => _TxCard(tx: _pagamentos[i]),
+                      (_, i) => _TxCard(
+                        tx: _pagamentos[i],
+                        valorExibido: _pagamentos[i].valor.abs(),
+                      ),
                       childCount: _pagamentos.length,
                     ),
                   ),
@@ -421,8 +451,7 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
                 const SliverToBoxAdapter(child: SizedBox(height: 100)),
             ],
 
-            if (_loading)
-              const SliverToBoxAdapter(child: LoadingState()),
+            if (_loading) const SliverToBoxAdapter(child: LoadingState()),
           ],
         ),
       ),
@@ -509,8 +538,7 @@ class _FaturaStatusCard extends StatelessWidget {
               if (conta.diaVencimento != null)
                 Text(
                   'Vence dia ${conta.diaVencimento}',
-                  style: TextStyle(
-                      color: context.textSecondary, fontSize: 12),
+                  style: TextStyle(color: context.textSecondary, fontSize: 12),
                 ),
             ],
           ),
@@ -592,9 +620,7 @@ class _FaturaStatusCard extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: onPagar,
                 icon: Icon(
-                  onPagar != null
-                      ? Icons.payment_rounded
-                      : Icons.block_rounded,
+                  onPagar != null ? Icons.payment_rounded : Icons.block_rounded,
                   size: 18,
                 ),
                 label: Text(
@@ -607,7 +633,8 @@ class _FaturaStatusCard extends StatelessWidget {
                 ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: onPagar != null ? cor : context.appCardLight,
-                  foregroundColor: onPagar != null ? Colors.white : context.textSecondary,
+                  foregroundColor:
+                      onPagar != null ? Colors.white : context.textSecondary,
                   elevation: 0,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
@@ -626,8 +653,8 @@ class _FaturaStatusCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Fatura em aberto: novas compras ainda podem ser adicionadas.',
-                      style: TextStyle(
-                          color: context.textSecondary, fontSize: 11),
+                      style:
+                          TextStyle(color: context.textSecondary, fontSize: 11),
                     ),
                   ),
                 ],
@@ -665,7 +692,14 @@ class _FaturaStatusCard extends StatelessWidget {
 
 class _TxCard extends StatelessWidget {
   final Transacao tx;
-  const _TxCard({required this.tx});
+  final double valorExibido;
+  final int? parcelaAtual;
+
+  const _TxCard({
+    required this.tx,
+    required this.valorExibido,
+    this.parcelaAtual,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -703,15 +737,14 @@ class _TxCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  '${tx.categoria} · ${dtFmt.format(tx.primeiraParcela)}${tx.parcelas > 1 ? ' · ${tx.parcelas}x' : ''}',
-                  style: TextStyle(
-                      color: context.textSecondary, fontSize: 11),
+                  '${tx.categoria} · ${dtFmt.format(tx.primeiraParcela)}${parcelaAtual != null ? ' · $parcelaAtual/${tx.parcelas}' : tx.parcelas > 1 ? ' · ${tx.parcelas}x' : ''}',
+                  style: TextStyle(color: context.textSecondary, fontSize: 11),
                 ),
               ],
             ),
           ),
           Text(
-            '${isDespesa ? '-' : '+'}${fmtBRL(tx.valor.abs())}',
+            '${isDespesa ? '-' : '+'}${fmtBRL(valorExibido)}',
             style: TextStyle(
               color: isDespesa ? AppColors.red : AppColors.green,
               fontWeight: FontWeight.w700,
@@ -757,8 +790,7 @@ class _HeaderChip extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style: TextStyle(
-                          color: Colors.white70, fontSize: 10)),
+                      style: TextStyle(color: Colors.white70, fontSize: 10)),
                   Text(value,
                       style: const TextStyle(
                           color: Colors.white,
@@ -782,13 +814,17 @@ class _PagarFaturaSheet extends StatefulWidget {
   final double valorFatura;
   final DateTime mesVencimento;
   const _PagarFaturaSheet(
-      {required this.conta, required this.valorFatura, required this.mesVencimento});
+      {required this.conta,
+      required this.valorFatura,
+      required this.mesVencimento});
 
   @override
   State<_PagarFaturaSheet> createState() => _PagarFaturaSheetState();
 }
 
 class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   List<Conta> _contas = [];
   String? _origemId;
   bool _saving = false;
@@ -809,7 +845,7 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
   }
 
   Future<void> _loadContas() async {
-    final c = await AppDB.getContas();
+    final c = await _accountRepository.getAll();
     setState(() {
       _contas = c.where((ct) => ct.tipo != 'credito').toList();
       if (_contas.isNotEmpty) _origemId = _contas.first.id;
@@ -818,21 +854,32 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
 
   Future<void> _pagar() async {
     if (_origemId == null) return;
-    final valorPagar =
-        double.tryParse(_valorCtrl.text.replaceAll(',', '.')) ??
-            widget.valorFatura;
+    final valorPagar = double.tryParse(_valorCtrl.text.replaceAll(',', '.')) ??
+        widget.valorFatura;
     if (valorPagar <= 0) return;
 
     setState(() => _saving = true);
 
     const meses = [
-      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
-      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+      'Janeiro',
+      'Fevereiro',
+      'Março',
+      'Abril',
+      'Maio',
+      'Junho',
+      'Julho',
+      'Agosto',
+      'Setembro',
+      'Outubro',
+      'Novembro',
+      'Dezembro'
     ];
-    final mesTxt = '${meses[widget.mesVencimento.month - 1]}/${widget.mesVencimento.year}';
+    final mesTxt =
+        '${meses[widget.mesVencimento.month - 1]}/${widget.mesVencimento.year}';
     final grupoId = 'pgto_fatura_${DateTime.now().millisecondsSinceEpoch}';
 
-    final diaVenc = widget.conta.diaVencimento ?? widget.conta.diaFechamento ?? 1;
+    final diaVenc =
+        widget.conta.diaVencimento ?? widget.conta.diaFechamento ?? 1;
     final dataPagamento = DateTime(
       widget.mesVencimento.year,
       widget.mesVencimento.month,
@@ -864,8 +911,7 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
       recorrenciaGrupoId: grupoId,
     );
 
-    await AppDB.insertTransacao(saida);
-    await AppDB.insertTransacao(entrada);
+    await _transactionRepository.insertTransfer(saida: saida, entrada: entrada);
 
     setState(() => _saving = false);
     AppState.notify();
@@ -909,7 +955,8 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
                   // Campo editável para permitir pagamento parcial
                   TextField(
                     controller: _valorCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
                     textAlign: TextAlign.center,
                     style: TextStyle(
                         color: context.textPrimary,
@@ -931,8 +978,8 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
                   const SizedBox(height: 4),
                   Text(
                     'Total da fatura: ${fmtBRL(widget.valorFatura)}',
-                    style: TextStyle(
-                        color: context.textSecondary, fontSize: 11),
+                    style:
+                        TextStyle(color: context.textSecondary, fontSize: 11),
                   ),
                 ],
               ),
@@ -970,9 +1017,8 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
                     margin: const EdgeInsets.only(bottom: 10),
                     padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
-                      color: selected
-                          ? cor.withOpacity(0.1)
-                          : context.appSurface,
+                      color:
+                          selected ? cor.withOpacity(0.1) : context.appSurface,
                       borderRadius: BorderRadius.circular(14),
                       border: Border.all(
                         color: selected ? cor : context.appDivider,
@@ -987,10 +1033,8 @@ class _PagarFaturaSheetState extends State<_PagarFaturaSheet> {
                           decoration: BoxDecoration(
                               color: cor.withOpacity(0.15),
                               borderRadius: BorderRadius.circular(10)),
-                          child: Icon(
-                              Icons.account_balance_wallet_rounded,
-                              color: cor,
-                              size: 20),
+                          child: Icon(Icons.account_balance_wallet_rounded,
+                              color: cor, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(

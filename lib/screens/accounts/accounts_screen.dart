@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/conta.dart';
 import '../../data/models/transaction.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
@@ -17,27 +18,44 @@ class AccountsScreen extends StatefulWidget {
 }
 
 class _AccountsScreenState extends State<AccountsScreen> {
+  static const _accountRepository = AccountRepository.instance;
   List<Conta> _contas = [];
   bool _loading = true;
-  bool _balanceVisible = true;
+  late bool _balanceVisible;
+  bool _hasLocalBalanceOverride = false;
 
   @override
   void initState() {
     super.initState();
+    _balanceVisible = AppState.instance.balanceVisible;
     _load();
-    AppState.instance.addListener(_load);
+    AppState.dataChanges.addListener(_load);
+    AppState.instance.addListener(_syncGlobalBalanceVisibility);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_load);
+    AppState.dataChanges.removeListener(_load);
+    AppState.instance.removeListener(_syncGlobalBalanceVisibility);
     super.dispose();
+  }
+
+  void _syncGlobalBalanceVisibility() {
+    if (_hasLocalBalanceOverride || !mounted) return;
+    setState(() => _balanceVisible = AppState.instance.balanceVisible);
+  }
+
+  void _toggleBalanceVisibility() {
+    setState(() {
+      _hasLocalBalanceOverride = true;
+      _balanceVisible = !_balanceVisible;
+    });
   }
 
   Future<void> _load() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    final c = await AppDB.getContas();
+    final c = await _accountRepository.getAll();
     if (!mounted) return;
     setState(() {
       _contas = c;
@@ -45,12 +63,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
     });
   }
 
-  double get _totalPatrimonio => _contas.fold<double>(
-      0, (s, c) => c.tipo == 'credito' ? s - c.saldo : s + c.saldo);
+  double get _totalPatrimonio =>
+      _contas.fold<double>(0, (s, c) => c.tipo == 'credito' ? s : s + c.saldo);
 
-  double get _totalDisponivel => _contas
-      .where((c) => c.tipo != 'credito')
-      .fold<double>(0, (s, c) => s + c.saldo);
+  double get _totalLimitesCredito => _contas
+      .where((c) => c.tipo == 'credito')
+      .fold<double>(0, (s, c) => s + c.limite);
 
   @override
   Widget build(BuildContext context) {
@@ -83,16 +101,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
                               : Icons.visibility_off_outlined,
                           color: context.textSecondary,
                         ),
-                        onPressed: () =>
-                            setState(() => _balanceVisible = !_balanceVisible),
+                        onPressed: _toggleBalanceVisibility,
                       ),
                       IconButton(
-                        icon: Icon(Icons.swap_horiz_rounded, color: context.textSecondary),
+                        icon: Icon(Icons.swap_horiz_rounded,
+                            color: context.textSecondary),
                         tooltip: 'Transferência',
                         onPressed: () async {
                           await Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const TransferScreen()),
+                            MaterialPageRoute(
+                                builder: (_) => const TransferScreen()),
                           );
                           AppState.notify();
                         },
@@ -132,6 +151,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                                       child: _ContaCard(
                                         conta: c,
                                         visible: _balanceVisible,
+                                        canManage: !_accountRepository
+                                            .isManagedBalanceAccount(c),
                                         onTap: () => _openDetail(c),
                                         onEdit: () => _editConta(c),
                                         onDelete: () => _deleteConta(c),
@@ -150,6 +171,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
                                       child: _ContaCard(
                                         conta: c,
                                         visible: _balanceVisible,
+                                        canManage: !_accountRepository
+                                            .isManagedBalanceAccount(c),
                                         onTap: () => _openDetail(c),
                                         onEdit: () => _editConta(c),
                                         onDelete: () => _deleteConta(c),
@@ -200,17 +223,17 @@ class _AccountsScreenState extends State<AccountsScreen> {
             children: [
               Expanded(
                 child: _TotalChip(
-                  label: 'Disponível',
+                  label: 'Limites de crédito',
                   value:
-                      _balanceVisible ? fmtBRL(_totalDisponivel) : '••••',
-                  icon: Icons.account_balance_wallet_outlined,
+                      _balanceVisible ? fmtBRL(_totalLimitesCredito) : '••••',
+                  icon: Icons.credit_card_outlined,
                 ),
               ),
               Expanded(
                 child: _TotalChip(
                   label: 'Contas',
                   value: '${_contas.length}',
-                  icon: Icons.credit_card_outlined,
+                  icon: Icons.account_balance_wallet_outlined,
                 ),
               ),
             ],
@@ -240,17 +263,19 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _editConta(Conta c) async {
+    if (_accountRepository.isManagedBalanceAccount(c)) return;
     await _showContaForm(c);
     AppState.notify();
   }
 
   Future<void> _deleteConta(Conta c) async {
+    if (_accountRepository.isManagedBalanceAccount(c)) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: context.appSurface,
-        title: Text('Excluir conta',
-            style: TextStyle(color: context.textPrimary)),
+        title:
+            Text('Excluir conta', style: TextStyle(color: context.textPrimary)),
         content: Text(
           'Excluir "${c.nome}"? As transações associadas serão mantidas.',
           style: TextStyle(color: context.textSecondary),
@@ -263,14 +288,13 @@ class _AccountsScreenState extends State<AccountsScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child:
-                Text('Excluir', style: TextStyle(color: AppColors.red)),
+            child: Text('Excluir', style: TextStyle(color: AppColors.red)),
           ),
         ],
       ),
     );
     if (ok == true) {
-      await AppDB.deleteConta(c.id);
+      await _accountRepository.delete(c.id);
       AppState.notify();
     }
   }
@@ -316,6 +340,7 @@ class _ContaFormSheet extends StatefulWidget {
 }
 
 class _ContaFormSheetState extends State<_ContaFormSheet> {
+  static const _accountRepository = AccountRepository.instance;
   late final TextEditingController nomeCtrl;
   late final TextEditingController limiteCtrl;
   late final TextEditingController saldoCtrl;
@@ -424,9 +449,9 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
     );
 
     if (e != null) {
-      await AppDB.updateConta(conta);
+      await _accountRepository.save(conta, isUpdate: true);
     } else {
-      await AppDB.insertConta(conta);
+      await _accountRepository.save(conta);
     }
     if (mounted) Navigator.pop(context);
   }
@@ -486,7 +511,8 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
                       margin: const EdgeInsets.only(right: 8),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: sel ? cor.withOpacity(0.25) : context.appCardLight,
+                        color:
+                            sel ? cor.withOpacity(0.25) : context.appCardLight,
                         borderRadius: BorderRadius.circular(12),
                         border: Border.all(
                           color: sel ? cor : Colors.transparent,
@@ -528,17 +554,25 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
-              children: ['credito', 'corrente', 'poupanca', 'investimento', 'beneficio']
-                  .map((t) {
+              children: [
+                'credito',
+                'corrente',
+                'poupanca',
+                'investimento',
+                'beneficio'
+              ].map((t) {
                 final sel = tipo == t;
                 return GestureDetector(
                   onTap: () => setState(() => tipo = t),
                   child: AnimatedContainer(
                     duration: const Duration(milliseconds: 150),
                     margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                     decoration: BoxDecoration(
-                      color: sel ? AppColors.blue.withOpacity(0.2) : context.appCardLight,
+                      color: sel
+                          ? AppColors.blue.withOpacity(0.2)
+                          : context.appCardLight,
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
                         color: sel ? AppColors.blue : Colors.transparent,
@@ -560,7 +594,8 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
 
             // Campos extras para crédito
             if (tipo == 'credito') ...[
-              _TextInput(ctrl: limiteCtrl, label: 'Limite (R\%)', isNumber: true),
+              _TextInput(
+                  ctrl: limiteCtrl, label: 'Limite (R\%)', isNumber: true),
               const SizedBox(height: 12),
               Row(
                 children: [
@@ -586,7 +621,8 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
             ],
 
             if (tipo != 'credito')
-              _TextInput(ctrl: saldoCtrl, label: 'Saldo atual (R\%)', isNumber: true),
+              _TextInput(
+                  ctrl: saldoCtrl, label: 'Saldo atual (R\%)', isNumber: true),
             const SizedBox(height: 24),
             GradientButton(
               label: widget.editando != null ? 'Salvar' : 'Adicionar conta',
@@ -712,7 +748,9 @@ class _DayPickerField extends StatelessWidget {
                 Text(
                   value != null ? 'Dia $value' : 'Selecionar',
                   style: TextStyle(
-                    color: value != null ? context.textPrimary : context.textSecondary,
+                    color: value != null
+                        ? context.textPrimary
+                        : context.textSecondary,
                     fontSize: 14,
                   ),
                 ),
@@ -738,6 +776,8 @@ class AccountDetailScreen extends StatefulWidget {
 }
 
 class _AccountDetailScreenState extends State<AccountDetailScreen> {
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   List<Transacao> _transacoes = [];
   bool _loading = true;
   late Conta _conta;
@@ -747,12 +787,12 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
     super.initState();
     _conta = widget.conta;
     _load();
-    AppState.instance.addListener(_load);
+    AppState.dataChanges.addListener(_load);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_load);
+    AppState.dataChanges.removeListener(_load);
     super.dispose();
   }
 
@@ -760,9 +800,10 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
     if (!mounted) return;
     setState(() => _loading = true);
     // Recarrega os dados da conta para refletir saldo atualizado
-    final contas = await AppDB.getContas();
-    final contaAtualizada = contas.where((c) => c.id == widget.conta.id).firstOrNull;
-    final t = await AppDB.getTransacoesByBanco(widget.conta.id);
+    final contas = await _accountRepository.getAll();
+    final contaAtualizada =
+        contas.where((c) => c.id == widget.conta.id).firstOrNull;
+    final t = await _transactionRepository.getByAccount(widget.conta.id);
     if (!mounted) return;
     setState(() {
       if (contaAtualizada != null) _conta = contaAtualizada;
@@ -802,33 +843,31 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                     colors: [color, color.withOpacity(0.6)],
                   ),
                 ),
-                child: SafeArea(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 60, 20, 20),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(c.nome,
-                            style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 24,
-                                fontWeight: FontWeight.w800)),
-                        Text(_tipoLabel(c.tipo),
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 14)),
-                        const SizedBox(height: 16),
-                        Text(
-                          fmtBRL(c.tipo == 'credito' ? c.disponivel : c.saldo),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 80, 20, 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(c.nome,
                           style: const TextStyle(
                               color: Colors.white,
-                              fontSize: 32,
-                              fontWeight: FontWeight.w800),
-                        ),
-                        Text(c.tipo == 'credito' ? 'disponível' : 'saldo atual',
-                            style: const TextStyle(
-                                color: Colors.white70, fontSize: 13)),
-                      ],
-                    ),
+                              fontSize: 24,
+                              fontWeight: FontWeight.w800)),
+                      Text(_tipoLabel(c.tipo),
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 14)),
+                      const SizedBox(height: 16),
+                      Text(
+                        fmtBRL(c.tipo == 'credito' ? c.disponivel : c.saldo),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800),
+                      ),
+                      Text(c.tipo == 'credito' ? 'disponível' : 'saldo atual',
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 13)),
+                    ],
                   ),
                 ),
               ),
@@ -865,7 +904,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                           (_, i) {
                             final t = _transacoes[i];
                             final isDespesa = t.valor < 0;
-                            final color = isDespesa ? AppColors.red : context.primary;
+                            final color =
+                                isDespesa ? AppColors.red : context.primary;
                             return Container(
                               margin: const EdgeInsets.only(bottom: 8),
                               padding: const EdgeInsets.all(16),
@@ -894,7 +934,8 @@ class _AccountDetailScreenState extends State<AccountDetailScreen> {
                                   Text(
                                     '${isDespesa ? '-' : '+'}${fmtBRL(t.valor.abs())}',
                                     style: TextStyle(
-                                        color: color, fontWeight: FontWeight.w700),
+                                        color: color,
+                                        fontWeight: FontWeight.w700),
                                   ),
                                 ],
                               ),
@@ -1026,7 +1067,9 @@ class _InfoItem extends StatelessWidget {
         const SizedBox(height: 2),
         Text(value,
             style: TextStyle(
-                color: context.textPrimary, fontSize: 14, fontWeight: FontWeight.w700)),
+                color: context.textPrimary,
+                fontSize: 14,
+                fontWeight: FontWeight.w700)),
       ],
     );
   }
@@ -1055,7 +1098,9 @@ class _TotalChip extends StatelessWidget {
         const SizedBox(height: 2),
         Text(value,
             style: const TextStyle(
-                color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.w700)),
       ],
     );
   }
@@ -1064,12 +1109,14 @@ class _TotalChip extends StatelessWidget {
 class _ContaCard extends StatelessWidget {
   final Conta conta;
   final bool visible;
+  final bool canManage;
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   const _ContaCard({
     required this.conta,
     required this.visible,
+    required this.canManage,
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
@@ -1131,34 +1178,54 @@ class _ContaCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                PopupMenuButton<String>(
-                  color: context.appCardLight,
-                  icon: Icon(Icons.more_vert, color: context.textSecondary),
-                  onSelected: (v) {
-                    if (v == 'edit') onEdit();
-                    if (v == 'delete') onDelete();
-                  },
-                  itemBuilder: (_) => [
-                    PopupMenuItem(
-                      value: 'edit',
-                      child: Row(children: [
-                        Icon(Icons.edit_outlined,
-                            color: context.textSecondary, size: 18),
-                        const SizedBox(width: 8),
-                        Text('Editar', style: TextStyle(color: context.textPrimary)),
-                      ]),
+                if (canManage)
+                  PopupMenuButton<String>(
+                    color: context.appCardLight,
+                    icon: Icon(Icons.more_vert, color: context.textSecondary),
+                    onSelected: (v) {
+                      if (v == 'edit') onEdit();
+                      if (v == 'delete') onDelete();
+                    },
+                    itemBuilder: (_) => [
+                      PopupMenuItem(
+                        value: 'edit',
+                        child: Row(children: [
+                          Icon(Icons.edit_outlined,
+                              color: context.textSecondary, size: 18),
+                          const SizedBox(width: 8),
+                          Text('Editar',
+                              style: TextStyle(color: context.textPrimary)),
+                        ]),
+                      ),
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: Row(children: [
+                          Icon(Icons.delete_outline,
+                              color: AppColors.red, size: 18),
+                          SizedBox(width: 8),
+                          Text('Excluir',
+                              style: TextStyle(color: AppColors.red)),
+                        ]),
+                      ),
+                    ],
+                  )
+                else
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: context.appCardLight,
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                    const PopupMenuItem(
-                      value: 'delete',
-                      child: Row(children: [
-                        Icon(Icons.delete_outline,
-                            color: AppColors.red, size: 18),
-                        SizedBox(width: 8),
-                        Text('Excluir', style: TextStyle(color: AppColors.red)),
-                      ]),
+                    child: Text(
+                      'Sistema',
+                      style: TextStyle(
+                        color: context.textSecondary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ],
-                ),
+                  ),
               ],
             ),
             const SizedBox(height: 20),
@@ -1198,16 +1265,21 @@ class _ContaCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    visible ? 'Utilizado: ${fmtBRL(conta.saldo)}' : 'Utilizado: ••••',
-                    style: TextStyle(color: context.textSecondary, fontSize: 12),
+                    visible
+                        ? 'Utilizado: ${fmtBRL(conta.saldo)}'
+                        : 'Utilizado: ••••',
+                    style:
+                        TextStyle(color: context.textSecondary, fontSize: 12),
                   ),
                   Text(
                     visible ? 'Limite: ${fmtBRL(conta.limite)}' : '••••',
-                    style: TextStyle(color: context.textSecondary, fontSize: 12),
+                    style:
+                        TextStyle(color: context.textSecondary, fontSize: 12),
                   ),
                 ],
               ),
-              if (conta.diaFechamento != null || conta.diaVencimento != null) ...[
+              if (conta.diaFechamento != null ||
+                  conta.diaVencimento != null) ...[
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -1237,7 +1309,8 @@ class _ContaCard extends StatelessWidget {
                 width: double.infinity,
                 child: OutlinedButton.icon(
                   onPressed: onTap,
-                  icon: Icon(Icons.receipt_long_rounded, size: 16, color: _color),
+                  icon:
+                      Icon(Icons.receipt_long_rounded, size: 16, color: _color),
                   label: Text('Ver fatura',
                       style: TextStyle(
                           fontSize: 13,

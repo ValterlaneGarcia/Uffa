@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../services/finance_service.dart';
-import '../../data/db/app_db.dart';
 import '../../data/models/orcamento.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/conta.dart';
@@ -9,6 +8,9 @@ import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
 import '../../widgets/common.dart';
+import '../../repositories/planning_repository.dart';
+import '../../repositories/account_repository.dart';
+import '../../repositories/transaction_repository.dart';
 
 class PlanningScreen extends StatefulWidget {
   const PlanningScreen({super.key});
@@ -19,6 +21,9 @@ class PlanningScreen extends StatefulWidget {
 
 class _PlanningScreenState extends State<PlanningScreen>
     with SingleTickerProviderStateMixin {
+  static const _planningRepository = PlanningRepository.instance;
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   late TabController _tabController;
   DateTime _selectedMonth = DateTime.now();
   MonthlySummary? _summary;
@@ -33,12 +38,12 @@ class _PlanningScreenState extends State<PlanningScreen>
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _loadData();
-    AppState.instance.addListener(_loadData);
+    AppState.dataChanges.addListener(_loadData);
   }
 
   @override
   void dispose() {
-    AppState.instance.removeListener(_loadData);
+    AppState.dataChanges.removeListener(_loadData);
     _tabController.dispose();
     super.dispose();
   }
@@ -46,18 +51,13 @@ class _PlanningScreenState extends State<PlanningScreen>
   Future<void> _loadData() async {
     if (!mounted) return;
     setState(() => _loading = true);
-    final summary = await FinanceService.getMonthlySummary(
-        _selectedMonth.year, _selectedMonth.month);
-    final metas = await AppDB.getMetas();
-    final orcamentos = await FinanceServiceOrcamento.getOrcamentosComRollover(
-        _selectedMonth.year, _selectedMonth.month);
-    final yearly = await FinanceService.getYearlyComparison(_selectedMonth.year);
+    final data = await FinanceService.loadPlanningData(_selectedMonth);
     if (!mounted) return;
     setState(() {
-      _summary = summary;
-      _metas = metas;
-      _orcamentos = orcamentos;
-      _yearlyData = yearly;
+      _summary = data.summary;
+      _metas = data.metas;
+      _orcamentos = data.orcamentos;
+      _yearlyData = data.yearly;
       _loading = false;
     });
   }
@@ -68,8 +68,8 @@ class _PlanningScreenState extends State<PlanningScreen>
       backgroundColor: context.appBackground,
       appBar: AppBar(
         backgroundColor: context.appSurface,
-        title: Text('Planejamento',
-            style: TextStyle(color: context.textPrimary)),
+        title:
+            Text('Planejamento', style: TextStyle(color: context.textPrimary)),
         actions: [
           IconButton(
             icon: Icon(Icons.add, color: context.primary),
@@ -307,7 +307,8 @@ class _PlanningScreenState extends State<PlanningScreen>
           icon: Icons.warning_rounded,
           color: AppColors.red,
           title: 'Gastos acima da renda',
-          desc: 'Você gastou ${(-taxa).toStringAsFixed(0)}% a mais do que recebeu.',
+          desc:
+              'Você gastou ${(-taxa).toStringAsFixed(0)}% a mais do que recebeu.',
         ));
       } else {
         insights.add(_InsightData(
@@ -326,7 +327,8 @@ class _PlanningScreenState extends State<PlanningScreen>
         icon: CategoriaHelper.getIcon(top.key),
         color: CategoriaHelper.getColor(top.key),
         title: 'Maior gasto: ${top.key}',
-        desc: '${fmtBRL(top.value)} (${s.despesas > 0 ? (top.value / s.despesas * 100).toStringAsFixed(0) : 0}% das despesas)',
+        desc:
+            '${fmtBRL(top.value)} (${s.despesas > 0 ? (top.value / s.despesas * 100).toStringAsFixed(0) : 0}% das despesas)',
       ));
     }
 
@@ -335,7 +337,8 @@ class _PlanningScreenState extends State<PlanningScreen>
         icon: Icons.lightbulb_outline,
         color: AppColors.blue,
         title: 'Adicione transações',
-        desc: 'Registre suas receitas e despesas para ver insights personalizados.',
+        desc:
+            'Registre suas receitas e despesas para ver insights personalizados.',
       ));
     }
 
@@ -407,13 +410,13 @@ class _PlanningScreenState extends State<PlanningScreen>
                 child: MonthSelectorPill(
                   selectedMonth: _selectedMonth,
                   onPrev: () {
-                    setState(() => _selectedMonth =
-                        DateTime(_selectedMonth.year, _selectedMonth.month - 1));
+                    setState(() => _selectedMonth = DateTime(
+                        _selectedMonth.year, _selectedMonth.month - 1));
                     _loadData();
                   },
                   onNext: () {
-                    setState(() => _selectedMonth =
-                        DateTime(_selectedMonth.year, _selectedMonth.month + 1));
+                    setState(() => _selectedMonth = DateTime(
+                        _selectedMonth.year, _selectedMonth.month + 1));
                     _loadData();
                   },
                 ),
@@ -436,8 +439,10 @@ class _PlanningScreenState extends State<PlanningScreen>
                     child: _OrcamentoCard(
                       data: _orcamentos[i],
                       onEdit: () => _editOrcamento(_orcamentos[i].orcamento),
-                      onDelete: () => _deleteOrcamento(_orcamentos[i].orcamento),
-                      onToggleRollover: () => _toggleRollover(_orcamentos[i].orcamento),
+                      onDelete: () =>
+                          _deleteOrcamento(_orcamentos[i].orcamento),
+                      onToggleRollover: () =>
+                          _toggleRollover(_orcamentos[i].orcamento),
                     ),
                   ),
                   childCount: _orcamentos.length,
@@ -449,7 +454,8 @@ class _PlanningScreenState extends State<PlanningScreen>
               child: EmptyState(
                 icon: Icons.account_balance_wallet_outlined,
                 title: 'Nenhum orçamento',
-                subtitle: 'Defina limites por categoria para controlar seus gastos mensais',
+                subtitle:
+                    'Defina limites por categoria para controlar seus gastos mensais',
                 actionLabel: 'Criar orçamento',
                 accentColor: AppColors.purple,
                 onAction: _addOrcamento,
@@ -473,7 +479,7 @@ class _PlanningScreenState extends State<PlanningScreen>
       ano: o.ano,
       rollover: !o.rollover,
     );
-    await AppDB.upsertOrcamento(updated);
+    await _planningRepository.saveOrcamento(updated);
     AppState.notify();
   }
 
@@ -515,7 +521,7 @@ class _PlanningScreenState extends State<PlanningScreen>
       ),
     );
     if (ok == true) {
-      await AppDB.deleteOrcamento(o.id);
+      await _planningRepository.deleteOrcamento(o.id);
       AppState.notify();
     }
   }
@@ -588,7 +594,9 @@ class _PlanningScreenState extends State<PlanningScreen>
             ],
 
             // Bar chart — Receita vs Despesa por categoria
-            if (s != null && (s.despesasPorCategoria.isNotEmpty || s.receitasPorCategoria.isNotEmpty)) ...[
+            if (s != null &&
+                (s.despesasPorCategoria.isNotEmpty ||
+                    s.receitasPorCategoria.isNotEmpty)) ...[
               SectionHeader(title: 'Receita vs Despesa por categoria'),
               const SizedBox(height: 12),
               _buildHorizontalBarChart(s),
@@ -673,11 +681,13 @@ class _PlanningScreenState extends State<PlanningScreen>
                   Container(
                     width: 10,
                     height: 10,
-                    decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                    decoration:
+                        BoxDecoration(color: color, shape: BoxShape.circle),
                   ),
                   const SizedBox(width: 4),
                   Text(e.key,
-                      style: TextStyle(fontSize: 12, color: context.textSecondary)),
+                      style: TextStyle(
+                          fontSize: 12, color: context.textSecondary)),
                   const SizedBox(width: 4),
                   Text(fmtBRL(e.value),
                       style: TextStyle(
@@ -697,7 +707,10 @@ class _PlanningScreenState extends State<PlanningScreen>
 
   Widget _buildHorizontalBarChart(MonthlySummary s) {
     // Merge all categories
-    final allCats = {...s.despesasPorCategoria.keys, ...s.receitasPorCategoria.keys}.toList();
+    final allCats = {
+      ...s.despesasPorCategoria.keys,
+      ...s.receitasPorCategoria.keys
+    }.toList();
     allCats.sort();
     if (allCats.isEmpty) return const SizedBox.shrink();
 
@@ -724,7 +737,8 @@ class _PlanningScreenState extends State<PlanningScreen>
                   Row(children: [
                     SizedBox(
                       width: 60,
-                      child: Text('Desp.', style: TextStyle(fontSize: 11, color: AppColors.red)),
+                      child: Text('Desp.',
+                          style: TextStyle(fontSize: 11, color: AppColors.red)),
                     ),
                     Expanded(
                       child: ClipRRect(
@@ -732,14 +746,16 @@ class _PlanningScreenState extends State<PlanningScreen>
                         child: LinearProgressIndicator(
                           value: desp / max,
                           backgroundColor: context.appCardLight,
-                          valueColor: const AlwaysStoppedAnimation(AppColors.red),
+                          valueColor:
+                              const AlwaysStoppedAnimation(AppColors.red),
                           minHeight: 8,
                         ),
                       ),
                     ),
                     const SizedBox(width: 8),
                     Text(fmtBRL(desp),
-                        style: TextStyle(fontSize: 11, color: context.textSecondary)),
+                        style: TextStyle(
+                            fontSize: 11, color: context.textSecondary)),
                   ]),
                   const SizedBox(height: 4),
                 ],
@@ -747,7 +763,9 @@ class _PlanningScreenState extends State<PlanningScreen>
                   Row(children: [
                     SizedBox(
                       width: 60,
-                      child: Text('Rec.', style: TextStyle(fontSize: 11, color: context.primary)),
+                      child: Text('Rec.',
+                          style:
+                              TextStyle(fontSize: 11, color: context.primary)),
                     ),
                     Expanded(
                       child: ClipRRect(
@@ -762,7 +780,8 @@ class _PlanningScreenState extends State<PlanningScreen>
                     ),
                     const SizedBox(width: 8),
                     Text(fmtBRL(rec),
-                        style: TextStyle(fontSize: 11, color: context.textSecondary)),
+                        style: TextStyle(
+                            fontSize: 11, color: context.textSecondary)),
                   ]),
               ],
             ),
@@ -776,12 +795,20 @@ class _PlanningScreenState extends State<PlanningScreen>
 
   Widget _buildYearlyChart() {
     final months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D'];
-    final recData = _yearlyData.asMap().entries.map((e) =>
-        FlSpot(e.key.toDouble(), e.value['receitas']!)).toList();
-    final despData = _yearlyData.asMap().entries.map((e) =>
-        FlSpot(e.key.toDouble(), e.value['despesas']!)).toList();
-    final maxY = _yearlyData.fold<double>(0, (m, d) =>
-        [m, d['receitas']!, d['despesas']!].reduce((a, b) => a > b ? a : b));
+    final recData = _yearlyData
+        .asMap()
+        .entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value['receitas']!))
+        .toList();
+    final despData = _yearlyData
+        .asMap()
+        .entries
+        .map((e) => FlSpot(e.key.toDouble(), e.value['despesas']!))
+        .toList();
+    final maxY = _yearlyData.fold<double>(
+        0,
+        (m, d) => [m, d['receitas']!, d['despesas']!]
+            .reduce((a, b) => a > b ? a : b));
 
     return AppCard(
       child: Column(
@@ -810,15 +837,19 @@ class _PlanningScreenState extends State<PlanningScreen>
                 ),
                 borderData: FlBorderData(show: false),
                 titlesData: FlTitlesData(
-                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
+                  topTitles: const AxisTitles(
+                      sideTitles: SideTitles(showTitles: false)),
                   bottomTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
                       getTitlesWidget: (v, _) {
                         final i = v.toInt();
-                        if (i < 0 || i >= months.length) return const SizedBox();
+                        if (i < 0 || i >= months.length)
+                          return const SizedBox();
                         return Text(months[i],
                             style: TextStyle(
                                 fontSize: 11, color: context.textSecondary));
@@ -854,14 +885,18 @@ class _PlanningScreenState extends State<PlanningScreen>
                 lineTouchData: LineTouchData(
                   touchTooltipData: LineTouchTooltipData(
                     getTooltipColor: (_) => context.appCardLight,
-                    getTooltipItems: (spots) => spots.map((s) => LineTooltipItem(
-                      fmtBRL(s.y),
-                      TextStyle(
-                        color: s.barIndex == 0 ? context.primary : AppColors.red,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 12,
-                      ),
-                    )).toList(),
+                    getTooltipItems: (spots) => spots
+                        .map((s) => LineTooltipItem(
+                              fmtBRL(s.y),
+                              TextStyle(
+                                color: s.barIndex == 0
+                                    ? context.primary
+                                    : AppColors.red,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                              ),
+                            ))
+                        .toList(),
                   ),
                 ),
               ),
@@ -906,7 +941,8 @@ class _PlanningScreenState extends State<PlanningScreen>
           const SizedBox(height: 16),
           ...projections.map((p) {
             final (mes, val) = p;
-            final pct = range > 0 ? ((val - minV) / range).clamp(0.0, 1.0) : 0.5;
+            final pct =
+                range > 0 ? ((val - minV) / range).clamp(0.0, 1.0) : 0.5;
             final isPositive = val >= 0;
             return Padding(
               padding: const EdgeInsets.only(bottom: 10),
@@ -954,8 +990,20 @@ class _PlanningScreenState extends State<PlanningScreen>
   }
 
   String _monthShort(int m) {
-    const names = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun',
-                   'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    const names = [
+      'Jan',
+      'Fev',
+      'Mar',
+      'Abr',
+      'Mai',
+      'Jun',
+      'Jul',
+      'Ago',
+      'Set',
+      'Out',
+      'Nov',
+      'Dez'
+    ];
     return names[m - 1];
   }
 
@@ -989,8 +1037,8 @@ class _PlanningScreenState extends State<PlanningScreen>
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: context.appSurface,
-        title: Text('Excluir meta',
-            style: TextStyle(color: context.textPrimary)),
+        title:
+            Text('Excluir meta', style: TextStyle(color: context.textPrimary)),
         content: Text('Excluir "${m.nome}"?',
             style: TextStyle(color: context.textSecondary)),
         actions: [
@@ -1006,7 +1054,7 @@ class _PlanningScreenState extends State<PlanningScreen>
       ),
     );
     if (ok == true) {
-      await AppDB.deleteMeta(m.id);
+      await _planningRepository.deleteMeta(m.id);
       AppState.notify();
     }
   }
@@ -1024,8 +1072,10 @@ class _OrcamentoResumoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final totalLimite = orcamentos.fold(0.0, (s, o) => s + o.limiteEfetivo);
     final totalGasto = orcamentos.fold(0.0, (s, o) => s + o.gastoReal);
-    final totalRollover = orcamentos.fold(0.0, (s, o) => s + o.rolloverAcumulado);
-    final pct = totalLimite > 0 ? (totalGasto / totalLimite).clamp(0.0, 1.0) : 0.0;
+    final totalRollover =
+        orcamentos.fold(0.0, (s, o) => s + o.rolloverAcumulado);
+    final pct =
+        totalLimite > 0 ? (totalGasto / totalLimite).clamp(0.0, 1.0) : 0.0;
     final estourados = orcamentos.where((o) => o.estourado).length;
 
     return AppCard(
@@ -1062,7 +1112,8 @@ class _OrcamentoResumoCard extends StatelessWidget {
               ),
               if (estourados > 0)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppColors.redLight,
                     borderRadius: BorderRadius.circular(8),
@@ -1095,7 +1146,9 @@ class _OrcamentoResumoCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Gasto', style: TextStyle(color: context.textSecondary, fontSize: 11)),
+                    Text('Gasto',
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 11)),
                     Text(fmtBRL(totalGasto),
                         style: TextStyle(
                             color: context.textPrimary,
@@ -1108,10 +1161,16 @@ class _OrcamentoResumoCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text('Disponível', style: TextStyle(color: context.textSecondary, fontSize: 11)),
-                    Text(fmtBRL((totalLimite - totalGasto).clamp(0, double.infinity)),
+                    Text('Disponível',
                         style: TextStyle(
-                            color: totalGasto > totalLimite ? AppColors.red : AppColors.green,
+                            color: context.textSecondary, fontSize: 11)),
+                    Text(
+                        fmtBRL((totalLimite - totalGasto)
+                            .clamp(0, double.infinity)),
+                        style: TextStyle(
+                            color: totalGasto > totalLimite
+                                ? AppColors.red
+                                : AppColors.green,
                             fontSize: 15,
                             fontWeight: FontWeight.w700)),
                   ],
@@ -1121,7 +1180,9 @@ class _OrcamentoResumoCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text('Limite total', style: TextStyle(color: context.textSecondary, fontSize: 11)),
+                    Text('Limite total',
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 11)),
                     Text(fmtBRL(totalLimite),
                         style: TextStyle(
                             color: context.textPrimary,
@@ -1242,7 +1303,9 @@ class _OrcamentoCard extends StatelessWidget {
                           o.rollover
                               ? Icons.toggle_on_rounded
                               : Icons.toggle_off_rounded,
-                          color: o.rollover ? AppColors.purple : context.textSecondary,
+                          color: o.rollover
+                              ? AppColors.purple
+                              : context.textSecondary,
                           size: 20,
                         ),
                         const SizedBox(width: 8),
@@ -1272,8 +1335,7 @@ class _OrcamentoCard extends StatelessWidget {
                         Icon(Icons.delete_rounded,
                             color: AppColors.red, size: 18),
                         SizedBox(width: 8),
-                        Text('Excluir',
-                            style: TextStyle(color: AppColors.red)),
+                        Text('Excluir', style: TextStyle(color: AppColors.red)),
                       ],
                     ),
                   ),
@@ -1288,7 +1350,9 @@ class _OrcamentoCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Gasto', style: TextStyle(color: context.textSecondary, fontSize: 11)),
+                    Text('Gasto',
+                        style: TextStyle(
+                            color: context.textSecondary, fontSize: 11)),
                     Text(fmtBRL(data.gastoReal),
                         style: TextStyle(
                             color: context.textPrimary,
@@ -1301,7 +1365,8 @@ class _OrcamentoCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Text('Limite${o.rollover ? ' (c/ rollover)' : ''}',
-                      style: TextStyle(color: context.textSecondary, fontSize: 11)),
+                      style: TextStyle(
+                          color: context.textSecondary, fontSize: 11)),
                   Text(fmtBRL(data.limiteEfetivo),
                       style: TextStyle(
                           color: context.textPrimary,
@@ -1327,7 +1392,8 @@ class _OrcamentoCard extends StatelessWidget {
             children: [
               if (o.rollover)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
                     color: AppColors.purple.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(6),
@@ -1363,9 +1429,7 @@ class _OrcamentoCard extends StatelessWidget {
               Text(
                 '${(pct * 100).toStringAsFixed(0)}%',
                 style: TextStyle(
-                    color: barColor,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700),
+                    color: barColor, fontSize: 12, fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -1391,15 +1455,24 @@ class _OrcamentoFormSheet extends StatefulWidget {
 }
 
 class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
+  static const _planningRepository = PlanningRepository.instance;
   final _limiteCtrl = TextEditingController();
   String _categoria = 'Alimentação';
   bool _rollover = false;
   bool _saving = false;
 
   static const _categorias = [
-    'Alimentação', 'Moradia', 'Transporte', 'Saúde', 'Lazer',
-    'Entretenimento', 'Educação', 'Assinatura', 'Vestuário',
-    'Viagem', 'Outros',
+    'Alimentação',
+    'Moradia',
+    'Transporte',
+    'Saúde',
+    'Lazer',
+    'Entretenimento',
+    'Educação',
+    'Assinatura',
+    'Vestuário',
+    'Viagem',
+    'Outros',
   ];
 
   @override
@@ -1420,8 +1493,7 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
   }
 
   Future<void> _save() async {
-    final raw = _limiteCtrl.text.replaceAll('.', '').replaceAll(',', '.');
-    final limite = double.tryParse(raw);
+    final limite = parseBRL(_limiteCtrl.text);
     if (limite == null || limite <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Informe um valor válido')),
@@ -1437,7 +1509,7 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
       ano: widget.editando?.ano ?? widget.anoPadrao,
       rollover: _rollover,
     );
-    await AppDB.upsertOrcamento(o);
+    await _planningRepository.saveOrcamento(o);
     AppState.notify();
     if (mounted) Navigator.pop(context, true);
   }
@@ -1476,8 +1548,7 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
 
           // Categoria
           Text('Categoria',
-              style:
-                  TextStyle(color: context.textSecondary, fontSize: 13)),
+              style: TextStyle(color: context.textSecondary, fontSize: 13)),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             value: _categoria,
@@ -1502,13 +1573,11 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
 
           // Limite
           Text('Limite mensal (R\$)',
-              style:
-                  TextStyle(color: context.textSecondary, fontSize: 13)),
+              style: TextStyle(color: context.textSecondary, fontSize: 13)),
           const SizedBox(height: 8),
           TextField(
             controller: _limiteCtrl,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
             style: TextStyle(color: context.textPrimary),
             decoration: InputDecoration(
               hintText: '0,00',
@@ -1594,8 +1663,8 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
                   Expanded(
                     child: Text(
                       'O saldo economizado em meses anteriores é acumulado automaticamente e somado ao limite deste mês.',
-                      style: const TextStyle(
-                          color: AppColors.blue, fontSize: 11),
+                      style:
+                          const TextStyle(color: AppColors.blue, fontSize: 11),
                     ),
                   ),
                 ],
@@ -1633,8 +1702,6 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
     );
   }
 }
-
-
 
 class _SummaryRow extends StatelessWidget {
   final IconData icon;
@@ -1853,7 +1920,9 @@ class _MetaCard extends StatelessWidget {
                           ? 'Faltam ${fmtBRL(falta)}'
                           : 'Meta atingida! 🎉',
                       style: TextStyle(
-                          color: falta <= 0 ? context.primary : context.textSecondary,
+                          color: falta <= 0
+                              ? context.primary
+                              : context.textSecondary,
                           fontSize: 12),
                     ),
                   ],
@@ -1862,9 +1931,7 @@ class _MetaCard extends StatelessWidget {
               Text(
                 '${(pct * 100).toStringAsFixed(0)}%',
                 style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w800,
-                    color: color),
+                    fontSize: 16, fontWeight: FontWeight.w800, color: color),
               ),
               PopupMenuButton<String>(
                 color: context.appCardLight,
@@ -1907,8 +1974,7 @@ class _MetaCard extends StatelessWidget {
                       fontSize: 13,
                       fontWeight: FontWeight.w600)),
               Text(fmtBRL(meta.valorAlvo),
-                  style: TextStyle(
-                      color: context.textSecondary, fontSize: 13)),
+                  style: TextStyle(color: context.textSecondary, fontSize: 13)),
             ],
           ),
           if (falta > 0) ...[
@@ -1940,22 +2006,28 @@ class _MetaCard extends StatelessWidget {
   }
 
   Widget _buildProjectionRow(BuildContext context, double falta, Color color) {
-    final poupancaMensal = summary != null ? (summary!.receitas - summary!.despesas) : 0.0;
+    final poupancaMensal =
+        summary != null ? (summary!.receitas - summary!.despesas) : 0.0;
     final prazo = meta.prazo;
     final now = DateTime.now();
 
     // Alerta de prazo
     if (prazo != null && !prazo.isBefore(now)) {
-      final mesesRestantes = (prazo.year - now.year) * 12 + (prazo.month - now.month);
-      final mesesNecessarios = poupancaMensal > 0 ? (falta / poupancaMensal).ceil() : null;
-      final atrasado = mesesNecessarios != null && mesesNecessarios > mesesRestantes;
+      final mesesRestantes =
+          (prazo.year - now.year) * 12 + (prazo.month - now.month);
+      final mesesNecessarios =
+          poupancaMensal > 0 ? (falta / poupancaMensal).ceil() : null;
+      final atrasado =
+          mesesNecessarios != null && mesesNecessarios > mesesRestantes;
 
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
             Icon(
-              atrasado ? Icons.warning_amber_rounded : Icons.calendar_today_rounded,
+              atrasado
+                  ? Icons.warning_amber_rounded
+                  : Icons.calendar_today_rounded,
               size: 14,
               color: atrasado ? AppColors.amber : context.textSecondary,
             ),
@@ -2010,8 +2082,20 @@ class _MetaCard extends StatelessWidget {
   }
 
   String _fmtDate(DateTime d) {
-    const months = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun',
-                    'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+    const months = [
+      'jan',
+      'fev',
+      'mar',
+      'abr',
+      'mai',
+      'jun',
+      'jul',
+      'ago',
+      'set',
+      'out',
+      'nov',
+      'dez'
+    ];
     return '${months[d.month - 1]}/${d.year}';
   }
 }
@@ -2068,6 +2152,7 @@ class _MetaFormSheet extends StatefulWidget {
 }
 
 class _MetaFormSheetState extends State<_MetaFormSheet> {
+  static const _planningRepository = PlanningRepository.instance;
   late final TextEditingController _nomeCtrl;
   late final TextEditingController _alvoCtrl;
   late final TextEditingController _atualCtrl;
@@ -2076,9 +2161,11 @@ class _MetaFormSheetState extends State<_MetaFormSheet> {
   void initState() {
     super.initState();
     final e = widget.editando;
-    _nomeCtrl  = TextEditingController(text: e?.nome ?? '');
-    _alvoCtrl  = TextEditingController(
-        text: e != null ? e.valorAlvo.toStringAsFixed(2).replaceAll('.', ',') : '');
+    _nomeCtrl = TextEditingController(text: e?.nome ?? '');
+    _alvoCtrl = TextEditingController(
+        text: e != null
+            ? e.valorAlvo.toStringAsFixed(2).replaceAll('.', ',')
+            : '');
     _atualCtrl = TextEditingController(
         text: e != null && e.valorAtual > 0
             ? e.valorAtual.toStringAsFixed(2).replaceAll('.', ',')
@@ -2098,7 +2185,9 @@ class _MetaFormSheetState extends State<_MetaFormSheet> {
     final editando = widget.editando;
     return Padding(
       padding: EdgeInsets.only(
-        left: 20, right: 20, top: 20,
+        left: 20,
+        right: 20,
+        top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20,
       ),
       child: Column(
@@ -2107,7 +2196,8 @@ class _MetaFormSheetState extends State<_MetaFormSheet> {
         children: [
           Center(
             child: Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                   color: context.textSecondary,
                   borderRadius: BorderRadius.circular(2)),
@@ -2124,7 +2214,8 @@ class _MetaFormSheetState extends State<_MetaFormSheet> {
           const SizedBox(height: 20),
           const _FieldLabel('Nome da meta'),
           const SizedBox(height: 6),
-          _DarkTextField(ctrl: _nomeCtrl, hint: 'Ex: Viagem, Reserva de emergência'),
+          _DarkTextField(
+              ctrl: _nomeCtrl, hint: 'Ex: Viagem, Reserva de emergência'),
           const SizedBox(height: 12),
           const _FieldLabel('Valor alvo (R\$)'),
           const SizedBox(height: 6),
@@ -2138,15 +2229,17 @@ class _MetaFormSheetState extends State<_MetaFormSheet> {
             label: editando != null ? 'Salvar' : 'Criar meta',
             onPressed: () async {
               if (_nomeCtrl.text.trim().isEmpty) return;
-              final alvo  = double.tryParse(_alvoCtrl.text.replaceAll(',', '.')) ?? 0;
-              final atual = double.tryParse(_atualCtrl.text.replaceAll(',', '.')) ?? 0;
-              final meta  = Meta(
+              final alvo =
+                  double.tryParse(_alvoCtrl.text.replaceAll(',', '.')) ?? 0;
+              final atual =
+                  double.tryParse(_atualCtrl.text.replaceAll(',', '.')) ?? 0;
+              final meta = Meta(
                 id: editando?.id,
                 nome: _nomeCtrl.text.trim(),
                 valorAlvo: alvo,
                 valorAtual: atual,
               );
-              await AppDB.upsertMeta(meta);
+              await _planningRepository.saveMeta(meta);
               AppState.notify();
               if (mounted) Navigator.pop(context);
             },
@@ -2168,6 +2261,9 @@ class _DepositMetaSheet extends StatefulWidget {
 }
 
 class _DepositMetaSheetState extends State<_DepositMetaSheet> {
+  static const _planningRepository = PlanningRepository.instance;
+  static const _accountRepository = AccountRepository.instance;
+  static const _transactionRepository = TransactionRepository.instance;
   late final TextEditingController _ctrl;
   List<Conta> _contas = [];
   String? _contaId;
@@ -2181,7 +2277,7 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
   }
 
   Future<void> _loadContas() async {
-    final contas = await AppDB.getContas();
+    final contas = await _accountRepository.getAll();
     final contasValidas = contas.where((c) => c.tipo != 'credito').toList();
     setState(() {
       _contas = contasValidas;
@@ -2201,7 +2297,9 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
     final m = widget.meta;
     return Padding(
       padding: EdgeInsets.only(
-        left: 20, right: 20, top: 20,
+        left: 20,
+        right: 20,
+        top: 20,
         bottom: MediaQuery.of(context).viewInsets.bottom + 20,
       ),
       child: Column(
@@ -2210,7 +2308,8 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
         children: [
           Center(
             child: Container(
-              width: 40, height: 4,
+              width: 40,
+              height: 4,
               decoration: BoxDecoration(
                   color: context.textSecondary,
                   borderRadius: BorderRadius.circular(2)),
@@ -2271,7 +2370,8 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
             onPressed: (_loading || _contas.isEmpty)
                 ? null
                 : () async {
-                    final v = double.tryParse(_ctrl.text.replaceAll(',', '.')) ?? 0;
+                    final v =
+                        double.tryParse(_ctrl.text.replaceAll(',', '.')) ?? 0;
                     if (v <= 0 || _contaId == null) return;
 
                     final updated = Meta(
@@ -2283,7 +2383,7 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
                       cor: m.cor,
                       prazo: m.prazo,
                     );
-                    await AppDB.upsertMeta(updated);
+                    await _planningRepository.saveMeta(updated);
 
                     final transacao = Transacao(
                       valor: -v,
@@ -2295,7 +2395,7 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
                       descricao: 'Depósito: ${m.nome}',
                       recorrencia: Recorrencia.nenhuma,
                     );
-                    await AppDB.insertTransacao(transacao);
+                    await _transactionRepository.save(transacao);
 
                     AppState.notify();
                     if (mounted) Navigator.pop(context);
@@ -2316,7 +2416,10 @@ class _LegendDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 10, height: 10, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+      Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
       const SizedBox(width: 5),
       Text(label, style: TextStyle(fontSize: 12, color: context.textSecondary)),
     ]);

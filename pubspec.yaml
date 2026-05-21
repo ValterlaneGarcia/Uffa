@@ -1,8 +1,8 @@
-name: financeapp
+name: uffa
 description: Controle financeiro pessoal offline
 
 publish_to: 'none'
-version: 2.1.0+2
+version: 2.1.1+3
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

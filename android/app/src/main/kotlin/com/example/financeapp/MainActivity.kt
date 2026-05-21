@@ -1,4 +1,4 @@
-package com.example.financeapp
+package com.example.uffa
 
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
