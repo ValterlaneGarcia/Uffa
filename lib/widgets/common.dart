@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../utils/app_theme.dart';
+import '../utils/formatters.dart';
 
 /// Primary action button – solid green, full-width
 class GradientButton extends StatelessWidget {
@@ -152,43 +153,150 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
+void showAppSnack(
+  BuildContext context,
+  String message, {
+  bool isError = false,
+  IconData? icon,
+  Color? backgroundColor,
+}) {
+  final messenger = ScaffoldMessenger.of(context);
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              icon ??
+                  (isError
+                      ? Icons.error_outline_rounded
+                      : Icons.check_circle_outline_rounded),
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor:
+            backgroundColor ?? (isError ? AppColors.red : context.textPrimary),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+}
+
+class LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const LegendDot({
+    super.key,
+    required this.color,
+    required this.label,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          label,
+          style: TextStyle(fontSize: 11, color: context.textSecondary),
+        ),
+      ],
+    );
+  }
+}
+
+class MonthNavigator extends StatelessWidget {
+  final DateTime selectedMonth;
+  final VoidCallback onPrev;
+  final VoidCallback onNext;
+  final VoidCallback? onTap;
+  final Color? backgroundColor;
+  final Color? foregroundColor;
+  final Color? iconColor;
+  final EdgeInsetsGeometry padding;
+  final double borderRadius;
+  final double fontSize;
+
+  const MonthNavigator({
+    super.key,
+    required this.selectedMonth,
+    required this.onPrev,
+    required this.onNext,
+    this.onTap,
+    this.backgroundColor,
+    this.foregroundColor,
+    this.iconColor,
+    this.padding = const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+    this.borderRadius = 20,
+    this.fontSize = 12,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = foregroundColor ?? context.textPrimary;
+    final ic = iconColor ?? context.textSecondary;
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        color: backgroundColor ?? context.appCardLight,
+        borderRadius: BorderRadius.circular(borderRadius),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: Icon(Icons.chevron_left, color: ic, size: 18),
+            onPressed: onPrev,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            padding: EdgeInsets.zero,
+          ),
+          GestureDetector(
+            onTap: onTap,
+            child: Text(
+              mesAbrevLabel(selectedMonth),
+              style: TextStyle(
+                color: fg,
+                fontSize: fontSize,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.chevron_right, color: ic, size: 18),
+            onPressed: onNext,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            padding: EdgeInsets.zero,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Month selector pill
 class MonthSelectorPill extends StatelessWidget {
   final DateTime selectedMonth;
   final VoidCallback onPrev;
   final VoidCallback onNext;
   final VoidCallback? onTap;
-
-  // Lista fixa de meses (constante)
-  static const List<String> meses = [
-    'Janeiro',
-    'Fevereiro',
-    'Março',
-    'Abril',
-    'Maio',
-    'Junho',
-    'Julho',
-    'Agosto',
-    'Setembro',
-    'Outubro',
-    'Novembro',
-    'Dezembro'
-  ];
-
-  static const List<String> mesesAbrev = [
-    'Jan',
-    'Fev',
-    'Mar',
-    'Abr',
-    'Mai',
-    'Jun',
-    'Jul',
-    'Ago',
-    'Set',
-    'Out',
-    'Nov',
-    'Dez'
-  ];
 
   const MonthSelectorPill({
     super.key,
@@ -200,43 +308,11 @@ class MonthSelectorPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final label =
-        '${mesesAbrev[selectedMonth.month - 1]} ${selectedMonth.year}';
-    return Container(
-      decoration: BoxDecoration(
-        color: context.appCardLight,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon: Icon(Icons.chevron_left,
-                color: context.textSecondary, size: 18),
-            onPressed: onPrev,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            padding: EdgeInsets.zero,
-          ),
-          GestureDetector(
-            onTap: onTap,
-            child: Text(
-              label,
-              style: TextStyle(
-                color: context.textPrimary,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: Icon(Icons.chevron_right,
-                color: context.textSecondary, size: 18),
-            onPressed: onNext,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            padding: EdgeInsets.zero,
-          ),
-        ],
-      ),
+    return MonthNavigator(
+      selectedMonth: selectedMonth,
+      onPrev: onPrev,
+      onNext: onNext,
+      onTap: onTap,
     );
   }
 }

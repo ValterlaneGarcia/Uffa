@@ -6,6 +6,7 @@ import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 import 'credit_invoice_screen.dart';
 import '../transactions/transfer_screen.dart';
@@ -317,13 +318,8 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   Future<void> _showContaForm(Conta? editando) async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
       builder: (_) => _ContaFormSheet(editando: editando),
     );
   }
@@ -675,12 +671,8 @@ class _DayPickerField extends StatelessWidget {
         const SizedBox(height: 6),
         GestureDetector(
           onTap: () async {
-            await showModalBottomSheet(
-              context: context,
-              backgroundColor: context.appSurface,
-              shape: const RoundedRectangleBorder(
-                borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-              ),
+            await context.showAppBottomSheet(
+              radius: 20,
               builder: (sheetCtx) => Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(

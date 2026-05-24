@@ -7,6 +7,7 @@ import '../../data/models/conta.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 import '../../repositories/planning_repository.dart';
 import '../../repositories/account_repository.dart';
@@ -832,9 +833,9 @@ class _PlanningScreenState extends State<PlanningScreen>
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            _LegendDot(color: context.primary, label: 'Receitas'),
+            LegendDot(color: context.primary, label: 'Receitas'),
             const SizedBox(width: 16),
-            const _LegendDot(color: AppColors.red, label: 'Despesas'),
+            const LegendDot(color: AppColors.red, label: 'Despesas'),
           ]),
           const SizedBox(height: 16),
           SizedBox(
@@ -1028,23 +1029,15 @@ class _PlanningScreenState extends State<PlanningScreen>
   Future<void> _editMeta(Meta m) => _showMetaForm(m);
 
   Future<void> _showMetaForm(Meta? editando) async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _MetaFormSheet(editando: editando),
     );
   }
 
   Future<void> _depositMeta(Meta m) async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _DepositMetaSheet(meta: m),
     );
   }
@@ -2421,24 +2414,5 @@ class _DepositMetaSheetState extends State<_DepositMetaSheet> {
         ],
       ),
     );
-  }
-}
-// ─── Legend dot widget ─────────────────────────────────────────
-
-class _LegendDot extends StatelessWidget {
-  final Color color;
-  final String label;
-  const _LegendDot({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [
-      Container(
-          width: 10,
-          height: 10,
-          decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-      const SizedBox(width: 5),
-      Text(label, style: TextStyle(fontSize: 12, color: context.textSecondary)),
-    ]);
   }
 }

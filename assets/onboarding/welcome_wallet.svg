@@ -1,0 +1,28 @@
+<svg width="320" height="240" viewBox="0 0 320 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="40" y1="24" x2="280" y2="216" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ECFDF5"/>
+      <stop offset="1" stop-color="#D1FAE5"/>
+    </linearGradient>
+    <linearGradient id="wallet" x1="82" y1="88" x2="222" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22C55E"/>
+      <stop offset="1" stop-color="#16A34A"/>
+    </linearGradient>
+  </defs>
+  <path d="M66 58C86 34 126 24 166 30C219 38 266 70 264 114C262 161 238 201 188 212C144 222 88 210 64 174C44 144 42 84 66 58Z" fill="url(#bg)"/>
+  <rect x="98" y="98" width="124" height="82" rx="16" fill="url(#wallet)"/>
+  <rect x="84" y="76" width="136" height="34" rx="10" transform="rotate(10 84 76)" fill="#34D399"/>
+  <rect x="106" y="108" width="120" height="72" rx="14" fill="url(#wallet)"/>
+  <rect x="184" y="128" width="34" height="30" rx="8" fill="#15803D"/>
+  <circle cx="204" cy="143" r="8" fill="#F8FAFC"/>
+  <path d="M56 170C44 154 28 150 20 152C30 160 36 170 38 182C44 180 50 176 56 170Z" fill="#22C55E"/>
+  <path d="M60 182C48 172 30 170 24 172C34 176 42 184 46 194C52 192 56 188 60 182Z" fill="#4ADE80"/>
+  <ellipse cx="72" cy="194" rx="20" ry="10" fill="#E2E8F0"/>
+  <rect x="56" y="176" width="20" height="20" rx="4" fill="#F8FAFC"/>
+  <rect x="62" y="166" width="8" height="14" rx="4" fill="#94A3B8"/>
+  <ellipse cx="100" cy="194" rx="18" ry="6" fill="#D4AF37"/>
+  <circle cx="100" cy="184" r="18" fill="#FACC15"/>
+  <circle cx="108" cy="176" r="4" fill="#FEF08A"/>
+  <ellipse cx="100" cy="176" rx="18" ry="6" fill="#FDE68A"/>
+  <ellipse cx="100" cy="166" rx="18" ry="6" fill="#FCD34D"/>
+</svg>

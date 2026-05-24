@@ -8,6 +8,7 @@ import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 
 class AddTransactionScreen extends StatefulWidget {
@@ -725,12 +726,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 .toList()
             : ['Salário', 'Freelance', 'Investimentos', 'Outros']);
 
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    await context.showAppBottomSheet(
+      radius: 20,
       builder: (_) => StatefulBuilder(builder: (ctx, setInner) {
         return Padding(
           padding: EdgeInsets.all(20),
@@ -800,12 +797,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   Future<void> _pickConta() async {
     final contasParaExibir = _contasValidas;
 
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    await context.showAppBottomSheet(
+      radius: 20,
       builder: (_) => Padding(
         padding: EdgeInsets.all(20),
         child: Column(
@@ -981,56 +974,45 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     final valorStr = _valorCtrl.text.trim().replaceAll(',', '.');
     final valor = double.tryParse(valorStr);
     if (valor == null || valor <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Informe um valor válido'),
-          backgroundColor: AppColors.red,
-        ),
-      );
+      showAppSnack(context, 'Informe um valor válido', isError: true);
       return;
     }
 
     // Validate transfer accounts
     if (_isTransferencia) {
       if (_contaId == null || _contaDestinoId == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Selecione a conta de origem e destino'),
-            backgroundColor: AppColors.red,
-          ),
+        showAppSnack(
+          context,
+          'Selecione a conta de origem e destino',
+          isError: true,
         );
         return;
       }
       if (_contaId == _contaDestinoId) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Conta de origem e destino devem ser diferentes'),
-            backgroundColor: AppColors.red,
-          ),
+        showAppSnack(
+          context,
+          'Conta de origem e destino devem ser diferentes',
+          isError: true,
         );
         return;
       }
       // Conta de destino não pode ser cartão de crédito
       final destino = _contas.where((c) => c.id == _contaDestinoId).firstOrNull;
       if (destino?.tipo == 'credito') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Cartão de crédito não pode ser destino de transferência'),
-            backgroundColor: AppColors.red,
-          ),
+        showAppSnack(
+          context,
+          'Cartão de crédito não pode ser destino de transferência',
+          isError: true,
         );
         return;
       }
       // Conta de origem não pode ser cartão de crédito
       final origem = _contas.where((c) => c.id == _contaId).firstOrNull;
       if (origem?.tipo == 'credito') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Cartão de crédito não pode ser origem de transferência'),
-            backgroundColor: AppColors.red,
-          ),
+        showAppSnack(
+          context,
+          'Cartão de crédito não pode ser origem de transferência',
+          isError: true,
         );
         return;
       }
@@ -1040,12 +1022,10 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     if (!_isDespesa && _contaId != null) {
       final selectedConta = _contas.where((c) => c.id == _contaId).firstOrNull;
       if (selectedConta?.tipo == 'credito') {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content:
-                Text('Cartões de crédito não aceitam lançamentos de entrada'),
-            backgroundColor: AppColors.red,
-          ),
+        showAppSnack(
+          context,
+          'Cartões de crédito não aceitam lançamentos de entrada',
+          isError: true,
         );
         return;
       }

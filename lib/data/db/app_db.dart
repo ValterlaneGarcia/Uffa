@@ -257,6 +257,15 @@ class AppDB {
     return maps.map((m) => Transacao.fromMap(m)).toList();
   }
 
+  static Future<List<Transacao>> getRecentTransacoes({int limit = 5}) async {
+    final maps = await (await db).query(
+      'transacoes',
+      orderBy: 'primeira_parcela DESC',
+      limit: limit,
+    );
+    return maps.map((m) => Transacao.fromMap(m)).toList();
+  }
+
   static Future<List<Transacao>> getTransacoesQueImpactamMes(
       int ano, int mes) async {
     final inicioMes = DateTime(ano, mes, 1).toIso8601String();
@@ -293,12 +302,16 @@ class AppDB {
         .toList();
   }
 
-  static Future<List<Transacao>> getTransacoesByBanco(String bancoId) async {
+  static Future<List<Transacao>> getTransacoesByBanco(
+    String bancoId, {
+    int? limit,
+  }) async {
     final maps = await (await db).query(
       'transacoes',
       where: 'banco = ?',
       whereArgs: [bancoId],
       orderBy: 'primeira_parcela DESC',
+      limit: limit,
     );
     return maps.map((m) => Transacao.fromMap(m)).toList();
   }

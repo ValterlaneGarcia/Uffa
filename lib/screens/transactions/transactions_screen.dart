@@ -6,6 +6,7 @@ import '../../repositories/transaction_repository.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 import 'add_transaction_screen.dart';
 import 'transfer_screen.dart';
@@ -162,11 +163,8 @@ class _TransactionsScreenState extends State<TransactionsScreen>
     // Categorias únicas do mês
     final cats = _transacoes.map((t) => t.categoria).toSet().toList()..sort();
 
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    await context.showAppBottomSheet(
+      radius: 20,
       isScrollControlled: true,
       builder: (_) => StatefulBuilder(builder: (ctx, setModal) {
         return Padding(

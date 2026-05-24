@@ -7,6 +7,7 @@ import '../../repositories/transaction_repository.dart';
 import '../../data/models/transaction.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 import 'package:uuid/uuid.dart';
 
@@ -336,7 +337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.info_outline,
           iconColor: context.textSecondary,
           label: 'Versão do app',
-          subtitle: 'v2.2.1 — UFFA APP - Financeiro Pessoal',
+          subtitle: 'v2.2.2 — UFFA APP - Financeiro Pessoal',
           onTap: null,
           showChevron: false,
         ),
@@ -345,35 +346,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _gerenciarCategorias() async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => const _CategoriasSheet(),
     );
   }
 
   Future<void> _editNome() async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _EditNomeSheet(nomeAtual: _nome),
     );
     _load();
   }
 
   Future<void> _editRendaBase() async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => const _RendaBaseSheet(),
     );
     // Reload local state after the sheet closes
@@ -412,12 +401,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   // ── FALTA-01: Aparência (modo escuro + cor primária) ──────────
   Future<void> _abrirAparencia() async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => const _AparenciaSheet(),
     );
   }
@@ -564,12 +549,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _showSnack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(color: Colors.white)),
-      backgroundColor: context.textPrimary,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-    ));
+    showAppSnack(context, msg);
   }
 }
 
@@ -1266,12 +1246,8 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
   }
 
   Future<void> _abrirForm({Map<String, dynamic>? cat}) async {
-    await showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
+    await context.showAppBottomSheet(
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       builder: (_) => _CategoriaFormSheet(categoriaExistente: cat),
     );
     await _load();
@@ -1282,13 +1258,7 @@ class _CategoriasSheetState extends State<_CategoriasSheet> {
     final isPadrao = (cat['padrao'] as int) == 1;
     if (isPadrao) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Categorias padrão não podem ser removidas'),
-          backgroundColor: context.appSurface,
-          behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ));
+        showAppSnack(context, 'Categorias padrão não podem ser removidas');
       }
       return;
     }

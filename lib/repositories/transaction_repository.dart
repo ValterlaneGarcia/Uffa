@@ -8,11 +8,14 @@ class TransactionRepository {
 
   Future<List<Transacao>> getAll() => AppDB.getTransacoes();
 
+  Future<List<Transacao>> getRecent({int limit = 5}) =>
+      AppDB.getRecentTransacoes(limit: limit);
+
   Future<List<Transacao>> getForMonth(int ano, int mes) =>
       AppDB.getTransacoesQueImpactamMes(ano, mes);
 
-  Future<List<Transacao>> getByAccount(String accountId) =>
-      AppDB.getTransacoesByBanco(accountId);
+  Future<List<Transacao>> getByAccount(String accountId, {int? limit}) =>
+      AppDB.getTransacoesByBanco(accountId, limit: limit);
 
   Future<void> save(Transacao transacao, {bool isUpdate = false}) {
     return isUpdate
