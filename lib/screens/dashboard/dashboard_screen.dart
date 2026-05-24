@@ -7,6 +7,7 @@ import '../../data/models/transaction.dart';
 import '../../utils/formatters.dart';
 import '../../utils/app_theme.dart';
 import '../../utils/app_state.dart';
+import '../../utils/bottom_sheet_helper.dart';
 import '../../widgets/common.dart';
 import '../transactions/add_transaction_screen.dart';
 import '../transactions/transactions_screen.dart';
@@ -42,6 +43,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   List<Map<String, double>> _yearly = [];
   List<Conta> _contas = [];
   List<Transacao> _recentes = [];
+  List<DashboardReminder> _reminders = [];
   bool _loading = true;
   String _nomeUsuario = 'Usuário';
   String? _error;
@@ -80,6 +82,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _yearly = data.yearly;
         _contas = data.contas;
         _recentes = data.recentes;
+        _reminders = data.reminders;
         _nomeUsuario = data.nomeUsuario;
         _loading = false;
       });
@@ -291,10 +294,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _WhiteMonthPill(
+                              MonthNavigator(
                                 selectedMonth: _selectedMonth,
                                 onPrev: _prevMonth,
                                 onNext: _nextMonth,
+                                backgroundColor: Colors.white.withOpacity(0.2),
+                                foregroundColor: Colors.white,
+                                iconColor: Colors.white70,
+                                fontSize: 13,
                               ),
                               if (summary != null) ...[
                                 const SizedBox(height: 10),
@@ -310,10 +317,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             Flexible(
-                              child: _WhiteMonthPill(
+                              child: MonthNavigator(
                                 selectedMonth: _selectedMonth,
                                 onPrev: _prevMonth,
                                 onNext: _nextMonth,
+                                backgroundColor: Colors.white.withOpacity(0.2),
+                                foregroundColor: Colors.white,
+                                iconColor: Colors.white70,
+                                fontSize: 13,
                               ),
                             ),
                             if (summary != null) ...[
@@ -401,9 +412,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             SizedBox(height: 6),
             Row(
               children: [
-                _LegendDot(color: context.primary, label: 'Receitas'),
+                LegendDot(color: context.primary, label: 'Receitas'),
                 const SizedBox(width: 16),
-                _LegendDot(color: AppColors.red, label: 'Despesas'),
+                const LegendDot(color: AppColors.red, label: 'Despesas'),
               ],
             ),
             const SizedBox(height: 20),
@@ -635,69 +646,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _showNotifications() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (_) => FutureBuilder<List<DashboardReminder>>(
-        future: FinanceService.getDashboardReminders(),
-        builder: (context, snapshot) {
-          final reminders = snapshot.data ?? const <DashboardReminder>[];
-          return Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: context.appDivider,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Text('Lembretes',
-                    style: TextStyle(
-                        color: context.textPrimary,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700)),
-                const SizedBox(height: 20),
-                if (snapshot.connectionState == ConnectionState.waiting)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: CircularProgressIndicator(),
-                  )
-                else if (reminders.isEmpty)
-                  EmptyState(
-                    icon: Icons.notifications_outlined,
-                    title: 'Nenhum lembrete agora',
-                    subtitle:
-                        'Quando houver orçamentos ou faturas em alerta, eles aparecem aqui.',
-                    accentColor: AppColors.amber,
-                  )
-                else
-                  ...reminders.map((reminder) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _ReminderTile(reminder: reminder),
-                      )),
-              ],
+    context.showAppBottomSheet(
+      builder: (_) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: context.appDivider,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-          );
-        },
+            const SizedBox(height: 16),
+            Text('Lembretes',
+                style: TextStyle(
+                    color: context.textPrimary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 20),
+            if (_reminders.isEmpty)
+              EmptyState(
+                icon: Icons.notifications_outlined,
+                title: 'Nenhum lembrete agora',
+                subtitle:
+                    'Quando houver orçamentos ou faturas em alerta, eles aparecem aqui.',
+                accentColor: AppColors.amber,
+              )
+            else
+              ..._reminders.map((reminder) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _ReminderTile(reminder: reminder),
+                  )),
+          ],
+        ),
       ),
     );
   }
 
   void _showUserMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: context.appSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+    context.showAppBottomSheet(
+      radius: 20,
       builder: (_) => Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -799,68 +790,6 @@ class _HeaderIconButton extends StatelessWidget {
           shape: BoxShape.circle,
         ),
         child: Icon(icon, color: Colors.white, size: 22),
-      ),
-    );
-  }
-}
-
-class _WhiteMonthPill extends StatelessWidget {
-  final DateTime selectedMonth;
-  final VoidCallback onPrev;
-  final VoidCallback onNext;
-  const _WhiteMonthPill(
-      {required this.selectedMonth,
-      required this.onPrev,
-      required this.onNext});
-
-  @override
-  Widget build(BuildContext context) {
-    const meses = [
-      'Jan',
-      'Fev',
-      'Mar',
-      'Abr',
-      'Mai',
-      'Jun',
-      'Jul',
-      'Ago',
-      'Set',
-      'Out',
-      'Nov',
-      'Dez'
-    ];
-    final label = '${meses[selectedMonth.month - 1]} ${selectedMonth.year}';
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            icon:
-                const Icon(Icons.chevron_left, color: Colors.white70, size: 18),
-            onPressed: onPrev,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            padding: EdgeInsets.zero,
-          ),
-          Text(
-            label,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.chevron_right,
-                color: Colors.white70, size: 18),
-            onPressed: onNext,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            padding: EdgeInsets.zero,
-          ),
-        ],
       ),
     );
   }
@@ -1030,28 +959,6 @@ class _ReminderTile extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _LegendDot extends StatelessWidget {
-  final Color color;
-  final String label;
-  const _LegendDot({required this.color, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        SizedBox(width: 4),
-        Text(label,
-            style: TextStyle(fontSize: 11, color: context.textSecondary)),
-      ],
     );
   }
 }
@@ -1570,9 +1477,9 @@ class _RelatorioScreenState extends State<_RelatorioScreen> {
             SizedBox(height: 6),
             Row(
               children: [
-                _LegendDot(color: context.primary, label: 'Receitas'),
+                LegendDot(color: context.primary, label: 'Receitas'),
                 const SizedBox(width: 16),
-                _LegendDot(color: AppColors.red, label: 'Despesas'),
+                const LegendDot(color: AppColors.red, label: 'Despesas'),
               ],
             ),
             const SizedBox(height: 20),

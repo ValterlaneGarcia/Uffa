@@ -130,30 +130,13 @@ class _TransferScreenState extends State<TransferScreen> {
     }
     _lastSnackMsg = msg;
     _lastSnackTime = now;
-
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(
-        content: Row(
-          children: [
-            Icon(
-              error ? Icons.error_outline_rounded : Icons.info_outline_rounded,
-              color: Colors.white,
-              size: 18,
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(msg,
-                  style: const TextStyle(fontWeight: FontWeight.w500)),
-            ),
-          ],
-        ),
-        backgroundColor: error ? AppColors.red : AppColors.blue,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        margin: const EdgeInsets.all(16),
-        duration: const Duration(seconds: 3),
-      ));
+    showAppSnack(
+      context,
+      msg,
+      isError: error,
+      icon: error ? Icons.error_outline_rounded : Icons.info_outline_rounded,
+      backgroundColor: error ? AppColors.red : AppColors.blue,
+    );
   }
 
   Future<void> _save() async {

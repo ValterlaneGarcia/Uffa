@@ -1,0 +1,13 @@
+<svg width="220" height="220" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(110 110) rotate(90) scale(90)">
+      <stop stop-color="#DCFCE7"/>
+      <stop offset="1" stop-color="#F0FDF4"/>
+    </radialGradient>
+  </defs>
+  <circle cx="110" cy="110" r="90" fill="url(#bg)"/>
+  <circle cx="110" cy="88" r="22" fill="#16A34A"/>
+  <path d="M69 150C69 127.356 87.3563 109 110 109C132.644 109 151 127.356 151 150V153H69V150Z" fill="#16A34A"/>
+  <circle cx="162" cy="64" r="12" fill="#BBF7D0"/>
+  <circle cx="52" cy="144" r="8" fill="#DCFCE7"/>
+</svg>

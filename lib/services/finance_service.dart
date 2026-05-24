@@ -60,6 +60,7 @@ class DashboardData {
   final List<Conta> contas;
   final List<Transacao> recentes;
   final String nomeUsuario;
+  final List<DashboardReminder> reminders;
 
   const DashboardData({
     required this.summary,
@@ -67,6 +68,7 @@ class DashboardData {
     required this.contas,
     required this.recentes,
     required this.nomeUsuario,
+    required this.reminders,
   });
 }
 
@@ -173,7 +175,7 @@ class FinanceService {
       final v = t.valorNoMes(ano, mes);
       if (v < 0) totalGasto += v.abs();
     }
-    final recentes = all.take(10).toList();
+    final recentes = await _transactions.getByAccount(conta.id, limit: 10);
     return ContaSummary(
       conta: conta,
       totalGasto: totalGasto,
@@ -256,17 +258,18 @@ class FinanceService {
         await getMonthlySummary(selectedMonth.year, selectedMonth.month);
     final yearly = await getYearlyComparison(selectedMonth.year);
     final contas = await _accounts.getAll();
-    final recentes = await _transactions.getAll();
-    recentes.sort((a, b) => b.primeiraParcela.compareTo(a.primeiraParcela));
+    final recentes = await _transactions.getRecent(limit: 5);
     final nomeUsuario =
         await _settings.getConfigValue('nome_usuario') ?? 'Usuário';
+    final reminders = await getDashboardReminders();
 
     return DashboardData(
       summary: summary,
       yearly: yearly,
       contas: contas,
-      recentes: recentes.take(5).toList(),
+      recentes: recentes,
       nomeUsuario: nomeUsuario,
+      reminders: reminders,
     );
   }
 
