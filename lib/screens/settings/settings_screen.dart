@@ -337,7 +337,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           icon: Icons.info_outline,
           iconColor: context.textSecondary,
           label: 'Versão do app',
-          subtitle: 'v2.2.2 — UFFA APP - Financeiro Pessoal',
+          subtitle: 'v2.2.3 — UFFA APP - Financeiro Pessoal',
           onTap: null,
           showChevron: false,
         ),

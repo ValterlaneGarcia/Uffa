@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../data/db/app_db.dart';
 import '../../data/models/conta.dart';
 import '../../data/models/transaction.dart';
 import '../../repositories/account_repository.dart';
@@ -42,12 +43,7 @@ class _CreditInvoiceScreenState extends State<CreditInvoiceScreen> {
 
   /// Retorna o mês da fatura atual levando em conta o diaFechamento.
   DateTime _faturaAtual() {
-    final now = DateTime.now();
-    final fechamento = widget.conta.diaFechamento;
-    if (fechamento != null && fechamento > 0 && now.day > fechamento) {
-      return DateTime(now.year, now.month + 1);
-    }
-    return DateTime(now.year, now.month);
+    return AppDB.resolverMesAbertoFatura(widget.conta, DateTime.now());
   }
 
   Future<void> _load() async {
@@ -587,8 +583,7 @@ class _FaturaStatusCard extends StatelessWidget {
                         style: TextStyle(
                             color: context.textSecondary, fontSize: 11)),
                     Text(
-                      fmtBRL((conta.limite - totalFatura)
-                          .clamp(0, double.infinity)),
+                      fmtBRL(conta.disponivel.clamp(0, double.infinity)),
                       style: TextStyle(
                           color: context.primary,
                           fontSize: 15,
@@ -602,14 +597,10 @@ class _FaturaStatusCard extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
-                value: conta.limite > 0
-                    ? (totalFatura / conta.limite).clamp(0.0, 1.0)
-                    : 0,
+                value: conta.percentUsed,
                 backgroundColor: context.appCardLight,
                 valueColor: AlwaysStoppedAnimation(
-                  totalFatura / (conta.limite > 0 ? conta.limite : 1) > 0.8
-                      ? AppColors.red
-                      : cor,
+                  conta.percentUsed > 0.8 ? AppColors.red : cor,
                 ),
                 minHeight: 8,
               ),

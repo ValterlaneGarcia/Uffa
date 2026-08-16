@@ -6,6 +6,8 @@ class Orcamento {
   final double limite;
   final int mes;
   final int ano;
+  final String? contaId;
+
   /// Se true, o saldo não utilizado do mês anterior é somado ao limite deste mês.
   final bool rollover;
 
@@ -15,6 +17,7 @@ class Orcamento {
     required this.limite,
     required this.mes,
     required this.ano,
+    this.contaId,
     this.rollover = false,
   }) : id = id ?? const Uuid().v4();
 
@@ -24,6 +27,7 @@ class Orcamento {
         'limite': limite,
         'mes': mes,
         'ano': ano,
+        'conta_id': contaId,
         'rollover': rollover ? 1 : 0,
       };
 
@@ -33,6 +37,7 @@ class Orcamento {
         limite: (m['limite'] as num).toDouble(),
         mes: m['mes'],
         ano: m['ano'],
+        contaId: m['conta_id'] as String?,
         rollover: (m['rollover'] as int? ?? 0) == 1,
       );
 }
@@ -56,7 +61,8 @@ class Meta {
     this.prazo,
   }) : id = id ?? const Uuid().v4();
 
-  double get progresso => valorAlvo > 0 ? (valorAtual / valorAlvo).clamp(0.0, 1.0) : 0;
+  double get progresso =>
+      valorAlvo > 0 ? (valorAtual / valorAlvo).clamp(0.0, 1.0) : 0;
 
   Map<String, dynamic> toMap() => {
         'id': id,

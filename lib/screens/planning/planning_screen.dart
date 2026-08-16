@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../../services/finance_service.dart';
+import '../../data/db/app_db.dart';
 import '../../data/models/orcamento.dart';
 import '../../data/models/transaction.dart';
 import '../../data/models/conta.dart';
@@ -12,6 +13,7 @@ import '../../widgets/common.dart';
 import '../../repositories/planning_repository.dart';
 import '../../repositories/account_repository.dart';
 import '../../repositories/transaction_repository.dart';
+import '../../repositories/category_repository.dart';
 
 class PlanningScreen extends StatefulWidget {
   const PlanningScreen({super.key});
@@ -30,6 +32,7 @@ class _PlanningScreenState extends State<PlanningScreen>
   MonthlySummary? _summary;
   List<Meta> _metas = [];
   List<OrcamentoComRollover> _orcamentos = [];
+  List<Conta> _contas = [];
   List<Map<String, double>> _yearlyData = [];
   bool _loadingRelatorios = false;
   bool _loading = true;
@@ -58,11 +61,13 @@ class _PlanningScreenState extends State<PlanningScreen>
     });
     try {
       final data = await FinanceService.loadPlanningData(_selectedMonth);
+      final contas = await _accountRepository.getAll();
       if (!mounted) return;
       setState(() {
         _summary = data.summary;
         _metas = data.metas;
         _orcamentos = data.orcamentos;
+        _contas = contas;
         _yearlyData = data.yearly;
         _loading = false;
       });
@@ -456,6 +461,10 @@ class _PlanningScreenState extends State<PlanningScreen>
                     padding: const EdgeInsets.only(bottom: 12),
                     child: _OrcamentoCard(
                       data: _orcamentos[i],
+                      conta: _contas
+                          .where(
+                              (c) => c.id == _orcamentos[i].orcamento.contaId)
+                          .firstOrNull,
                       onEdit: () => _editOrcamento(_orcamentos[i].orcamento),
                       onDelete: () =>
                           _deleteOrcamento(_orcamentos[i].orcamento),
@@ -495,6 +504,7 @@ class _PlanningScreenState extends State<PlanningScreen>
       limite: o.limite,
       mes: o.mes,
       ano: o.ano,
+      contaId: o.contaId,
       rollover: !o.rollover,
     );
     await _planningRepository.saveOrcamento(updated);
@@ -1236,16 +1246,25 @@ class _OrcamentoResumoCard extends StatelessWidget {
 
 class _OrcamentoCard extends StatelessWidget {
   final OrcamentoComRollover data;
+  final Conta? conta;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onToggleRollover;
 
   const _OrcamentoCard({
     required this.data,
+    required this.conta,
     required this.onEdit,
     required this.onDelete,
     required this.onToggleRollover,
   });
+
+  String get _contaTipoLabel {
+    if (conta == null) return 'Todas as contas';
+    if (conta!.id == AppDB.balanceAccountId) return 'Conta salário';
+    if (conta!.tipo == 'credito') return 'Crédito';
+    return conta!.tipo;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1284,6 +1303,15 @@ class _OrcamentoCard extends StatelessWidget {
                             color: context.textPrimary,
                             fontSize: 14,
                             fontWeight: FontWeight.w600)),
+                    Text(
+                      conta == null
+                          ? _contaTipoLabel
+                          : '${conta!.nome} · $_contaTipoLabel',
+                      style: TextStyle(
+                          color: context.textSecondary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500),
+                    ),
                     if (o.rollover && data.rolloverAcumulado > 0)
                       Text(
                         '+ ${fmtBRL(data.rolloverAcumulado)} de meses anteriores',
@@ -1466,24 +1494,17 @@ class _OrcamentoFormSheet extends StatefulWidget {
 
 class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
   static const _planningRepository = PlanningRepository.instance;
+  static const _categoryRepository = CategoryRepository.instance;
+  static const _accountRepository = AccountRepository.instance;
   final _limiteCtrl = TextEditingController();
   String _categoria = 'Alimentação';
+  String? _contaId;
+  List<String> _categorias = [];
+  List<Conta> _contasOrcamento = [];
+  bool _loadingCategorias = true;
+  bool _loadingContas = true;
   bool _rollover = false;
   bool _saving = false;
-
-  static const _categorias = [
-    'Alimentação',
-    'Moradia',
-    'Transporte',
-    'Saúde',
-    'Lazer',
-    'Entretenimento',
-    'Educação',
-    'Assinatura',
-    'Vestuário',
-    'Viagem',
-    'Outros',
-  ];
 
   @override
   void initState() {
@@ -1492,8 +1513,11 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
       final o = widget.editando!;
       _limiteCtrl.text = o.limite.toStringAsFixed(2).replaceAll('.', ',');
       _categoria = o.categoria;
+      _contaId = o.contaId;
       _rollover = o.rollover;
     }
+    _loadCategorias();
+    _loadContas();
   }
 
   @override
@@ -1510,6 +1534,13 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
       );
       return;
     }
+    final contaValida = _contasOrcamento.any((c) => c.id == _contaId);
+    if (_loadingContas || _contaId == null || !contaValida) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecione uma conta')),
+      );
+      return;
+    }
     setState(() => _saving = true);
     final o = Orcamento(
       id: widget.editando?.id,
@@ -1517,11 +1548,54 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
       limite: limite,
       mes: widget.editando?.mes ?? widget.mesPadrao,
       ano: widget.editando?.ano ?? widget.anoPadrao,
+      contaId: _contaId,
       rollover: _rollover,
     );
     await _planningRepository.saveOrcamento(o);
     AppState.notify();
     if (mounted) Navigator.pop(context, true);
+  }
+
+  Future<void> _loadCategorias() async {
+    List<String> categorias;
+    try {
+      categorias = await _categoryRepository.getBudgetNames();
+    } catch (_) {
+      categorias = const ['Outros'];
+    }
+    if (!mounted) return;
+    final loaded = [...categorias];
+    if (_categoria.isNotEmpty && !loaded.contains(_categoria)) {
+      loaded.insert(0, _categoria);
+    }
+    if (loaded.isEmpty) {
+      loaded.add('Outros');
+      _categoria = 'Outros';
+    } else if (!loaded.contains(_categoria)) {
+      _categoria = loaded.first;
+    }
+    setState(() {
+      _categorias = loaded;
+      _loadingCategorias = false;
+    });
+  }
+
+  Future<void> _loadContas() async {
+    final contas = await _accountRepository.getAll();
+    if (!mounted) return;
+    final contasValidas = contas
+        .where((c) =>
+            c.id == AppDB.balanceAccountId ||
+            c.tipo == 'credito' ||
+            c.id == _contaId)
+        .toList();
+    if (_contaId == null && contasValidas.isNotEmpty) {
+      _contaId = contasValidas.first.id;
+    }
+    setState(() {
+      _contasOrcamento = contasValidas;
+      _loadingContas = false;
+    });
   }
 
   @override
@@ -1561,10 +1635,21 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
               style: TextStyle(color: context.textSecondary, fontSize: 13)),
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: _categoria,
+            isExpanded: true,
+            value: _categorias.contains(_categoria) ? _categoria : null,
             dropdownColor: context.appSurface,
             style: TextStyle(color: context.textPrimary),
             decoration: InputDecoration(
+              suffixIcon: _loadingCategorias
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
               filled: true,
               fillColor: context.appCardLight,
               contentPadding:
@@ -1577,7 +1662,52 @@ class _OrcamentoFormSheetState extends State<_OrcamentoFormSheet> {
             items: _categorias
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
-            onChanged: (v) => setState(() => _categoria = v!),
+            onChanged: _loadingCategorias
+                ? null
+                : (v) => setState(() => _categoria = v!),
+          ),
+          const SizedBox(height: 16),
+
+          // Conta base
+          Text('Conta',
+              style: TextStyle(color: context.textSecondary, fontSize: 13)),
+          const SizedBox(height: 4),
+          Text(
+            'Apenas conta salário e cartões de crédito são suportados para orçamentos',
+            style: TextStyle(color: context.textSecondary, fontSize: 11),
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            isExpanded: true,
+            value:
+                _contasOrcamento.any((c) => c.id == _contaId) ? _contaId : null,
+            dropdownColor: context.appSurface,
+            style: TextStyle(color: context.textPrimary),
+            decoration: InputDecoration(
+              suffixIcon: _loadingContas
+                  ? const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : null,
+              filled: true,
+              fillColor: context.appCardLight,
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+            items: _contasOrcamento
+                .map((c) => DropdownMenuItem(value: c.id, child: Text(c.nome)))
+                .toList(),
+            onChanged:
+                _loadingContas ? null : (v) => setState(() => _contaId = v),
           ),
           const SizedBox(height: 16),
 

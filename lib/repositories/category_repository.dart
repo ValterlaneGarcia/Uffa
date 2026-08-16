@@ -9,6 +9,9 @@ class CategoryRepository {
 
   Future<List<String>> getNames() => AppDB.getNomesCategorias();
 
+  Future<List<String>> getBudgetNames() =>
+      AppDB.getNomesCategoriasParaOrcamento();
+
   Future<void> save(Map<String, dynamic> category) =>
       AppDB.upsertCategoria(category);
 
