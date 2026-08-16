@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../data/db/app_db.dart';
 import '../../data/models/conta.dart';
 import '../../data/models/transaction.dart';
 import '../../repositories/account_repository.dart';
@@ -361,6 +362,8 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
   BancoInfo? bancoSelecionado;
   int? diaVencimento;
   int? diaFechamento;
+  int? faturaAbertaMes;
+  int? faturaAbertaAno;
 
   @override
   void initState() {
@@ -380,6 +383,14 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
     tipo = e?.tipo ?? 'corrente';
     diaVencimento = e?.diaVencimento;
     diaFechamento = e?.diaFechamento;
+    if (e?.tipo == 'credito') {
+      final faturaAberta =
+          e!.faturaAbertaMes != null && e.faturaAbertaAno != null
+              ? DateTime(e.faturaAbertaAno!, e.faturaAbertaMes!)
+              : AppDB.resolverMesAbertoFatura(e, DateTime.now());
+      faturaAbertaMes = faturaAberta.month;
+      faturaAbertaAno = faturaAberta.year;
+    }
     if (e?.icone != null) {
       try {
         bancoSelecionado =
@@ -436,6 +447,13 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
 
     final limite = double.tryParse(limiteCtrl.text.replaceAll(',', '.')) ?? 0;
     final saldo = double.tryParse(saldoCtrl.text.replaceAll(',', '.')) ?? 0;
+    if (tipo == 'credito' &&
+        (faturaAbertaMes == null || faturaAbertaAno == null)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Selecione a fatura em aberto')),
+      );
+      return;
+    }
 
     final e = widget.editando;
     // When editing, preserve the original saldoInicial unless the user
@@ -459,6 +477,8 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
       icone: bancoSelecionado?.icone,
       diaVencimento: tipo == 'credito' ? diaVencimento : null,
       diaFechamento: tipo == 'credito' ? diaFechamento : null,
+      faturaAbertaMes: tipo == 'credito' ? faturaAbertaMes : null,
+      faturaAbertaAno: tipo == 'credito' ? faturaAbertaAno : null,
     );
 
     if (e != null) {
@@ -631,6 +651,16 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
                   ),
                 ],
               ),
+              const SizedBox(height: 12),
+              _MonthYearPickerField(
+                label: 'Fatura em aberto',
+                mes: faturaAbertaMes,
+                ano: faturaAbertaAno,
+                onChanged: (dt) => setState(() {
+                  faturaAbertaMes = dt.month;
+                  faturaAbertaAno = dt.year;
+                }),
+              ),
             ],
 
             if (tipo != 'credito')
@@ -649,6 +679,126 @@ class _ContaFormSheetState extends State<_ContaFormSheet> {
 }
 
 // ─── Day picker field (sem validação de minDay) ─────────────────
+
+class _MonthYearPickerField extends StatelessWidget {
+  final String label;
+  final int? mes;
+  final int? ano;
+  final ValueChanged<DateTime> onChanged;
+
+  const _MonthYearPickerField({
+    required this.label,
+    required this.mes,
+    required this.ano,
+    required this.onChanged,
+  });
+
+  static const _meses = [
+    'Janeiro',
+    'Fevereiro',
+    'Março',
+    'Abril',
+    'Maio',
+    'Junho',
+    'Julho',
+    'Agosto',
+    'Setembro',
+    'Outubro',
+    'Novembro',
+    'Dezembro',
+  ];
+
+  String get _valueLabel {
+    if (mes == null || ano == null) return 'Selecionar';
+    return '${_meses[mes! - 1]} $ano';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    final opcoes = List.generate(
+      5,
+      (i) => DateTime(now.year, now.month - 2 + i),
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(color: context.textSecondary, fontSize: 13)),
+        const SizedBox(height: 4),
+        Text(
+          'Informe qual fatura está aberta agora',
+          style: TextStyle(color: context.textSecondary, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        GestureDetector(
+          onTap: () async {
+            await context.showAppBottomSheet(
+              radius: 20,
+              builder: (sheetCtx) => Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: TextStyle(
+                            color: context.textPrimary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 16),
+                    ...opcoes.map((dt) {
+                      final isSelected = mes == dt.month && ano == dt.year;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          '${_meses[dt.month - 1]} ${dt.year}',
+                          style: TextStyle(color: context.textPrimary),
+                        ),
+                        trailing: isSelected
+                            ? const Icon(Icons.check_rounded,
+                                color: AppColors.blue)
+                            : null,
+                        onTap: () {
+                          onChanged(dt);
+                          Navigator.pop(sheetCtx);
+                        },
+                      );
+                    }),
+                  ],
+                ),
+              ),
+            );
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: context.appCardLight,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  _valueLabel,
+                  style: TextStyle(
+                    color: mes != null && ano != null
+                        ? context.textPrimary
+                        : context.textSecondary,
+                    fontSize: 14,
+                  ),
+                ),
+                Icon(Icons.keyboard_arrow_down,
+                    color: context.textSecondary, size: 18),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 class _DayPickerField extends StatelessWidget {
   final String label;

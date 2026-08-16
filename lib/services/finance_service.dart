@@ -399,14 +399,34 @@ class OrcamentoComRollover {
 }
 
 class FinanceServiceOrcamento {
+  static String _orcamentoCacheKey(Orcamento o) =>
+      '${o.categoria}|${o.contaId ?? ''}';
+
+  static DateTime _mesConsultaOrcamento(
+    Orcamento orcamento,
+    Map<String, Conta> contasById,
+    int ano,
+    int mes,
+  ) {
+    final contaId = orcamento.contaId;
+    if (contaId == null) return DateTime(ano, mes);
+
+    final conta = contasById[contaId];
+    if (conta?.tipo != 'credito') return DateTime(ano, mes);
+    final now = DateTime.now();
+    final referencia =
+        now.year == ano && now.month == mes ? now : DateTime(ano, mes);
+    return AppDB.resolverMesAbertoFatura(conta!, referencia);
+  }
+
   /// Retorna o gasto de uma categoria num mês específico.
-  static Future<double> getGastoCategoria(
-      String categoria, int ano, int mes) async {
+  static Future<double> getGastoCategoria(String categoria, int ano, int mes,
+      {String? contaId}) async {
     final transacoes =
         await TransactionRepository.instance.getForMonth(ano, mes);
     double total = 0;
     for (final t in transacoes) {
-      if (t.categoria == categoria) {
+      if (t.categoria == categoria && (contaId == null || t.banco == contaId)) {
         final v = t.valorNoMes(ano, mes);
         if (v < 0 && !t.isTransferencia) total += v.abs();
       }
@@ -422,12 +442,16 @@ class FinanceServiceOrcamento {
       ano: ano,
     );
     final todosOrcamentos = await PlanningRepository.instance.getOrcamentos();
+    final contas = await AppDB.getContas();
+    final contasById = {for (final conta in contas) conta.id: conta};
     final result = <OrcamentoComRollover>[];
     final gastosCache = <String, Map<int, double>>{};
 
     for (final o in orcamentos) {
+      final mesConsulta = _mesConsultaOrcamento(o, contasById, ano, mes);
       final orcamentosDaCategoria = todosOrcamentos
-          .where((item) => item.categoria == o.categoria)
+          .where((item) =>
+              item.categoria == o.categoria && item.contaId == o.contaId)
           .toList();
       final primeiroRollover = orcamentosDaCategoria
           .where((item) => item.rollover)
@@ -438,17 +462,18 @@ class FinanceServiceOrcamento {
         return itemDate.isBefore(menorDate) ? item : menor;
       });
       final inicio = primeiroRollover == null
-          ? DateTime(ano, mes)
+          ? mesConsulta
           : DateTime(primeiroRollover.ano, primeiroRollover.mes);
       final gastosPorMes = gastosCache.putIfAbsent(
-        o.categoria,
+        _orcamentoCacheKey(o),
         () => {},
       );
       if (gastosPorMes.isEmpty) {
         gastosPorMes.addAll(await AppDB.getGastosMensaisCategoria(
           categoria: o.categoria,
           inicio: inicio,
-          fim: DateTime(ano, mes),
+          fim: mesConsulta,
+          contaId: o.contaId,
         ));
       }
 
@@ -457,7 +482,9 @@ class FinanceServiceOrcamento {
         orcamentosDaCategoria: orcamentosDaCategoria,
         gastosPorMes: gastosPorMes,
       );
-      final gastoReal = gastosPorMes[AppDB.monthKey(ano, mes)] ?? 0;
+      final gastoReal =
+          gastosPorMes[AppDB.monthKey(mesConsulta.year, mesConsulta.month)] ??
+              0;
       result.add(OrcamentoComRollover(
         orcamento: o,
         limiteEfetivo: limiteEfetivo,

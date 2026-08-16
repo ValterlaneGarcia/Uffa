@@ -1018,6 +1018,11 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       }
     }
 
+    if (!_isTransferencia && _contaId == null) {
+      showAppSnack(context, 'Selecione uma conta', isError: true);
+      return;
+    }
+
     // Validate: credit accounts cannot have income
     if (!_isDespesa && _contaId != null) {
       final selectedConta = _contas.where((c) => c.id == _contaId).firstOrNull;
@@ -1038,7 +1043,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       final grupoId = 'transf_${DateTime.now().millisecondsSinceEpoch}';
       final saida = Transacao(
         valor: -valor,
-        banco: _contaId ?? 'geral',
+        banco: _contaId!,
         parcelas: 1,
         primeiraParcela: _date,
         categoria: 'Transferência',
@@ -1051,7 +1056,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       );
       final entrada = Transacao(
         valor: valor,
-        banco: _contaDestinoId ?? 'geral',
+        banco: _contaDestinoId!,
         parcelas: 1,
         primeiraParcela: _date,
         categoria: 'Transferência',
@@ -1070,7 +1075,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       final t = Transacao(
         id: widget.editando?.id,
         valor: _isDespesa ? -valor : valor,
-        banco: _contaId ?? 'geral',
+        banco: _contaId!,
         parcelas: _recorrencia != Recorrencia.nenhuma ? 1 : _parcelas,
         primeiraParcela: _date,
         recorrenciaDataBase:

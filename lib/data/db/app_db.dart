@@ -32,7 +32,7 @@ class AppDB {
     final path = join(await getDatabasesPath(), 'Uffa_v2.db');
     return openDatabase(
       path,
-      version: 13,
+      version: 15,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
@@ -109,6 +109,15 @@ class AppDB {
         'UPDATE transacoes SET recorrencia_data_base = primeira_parcela WHERE recorrencia > 0 AND recorrencia_data_base IS NULL',
       );
     }
+    if (oldVersion < 14) {
+      await db.execute('ALTER TABLE orcamentos ADD COLUMN conta_id TEXT');
+    }
+    if (oldVersion < 15) {
+      await db
+          .execute('ALTER TABLE contas ADD COLUMN fatura_aberta_mes INTEGER');
+      await db
+          .execute('ALTER TABLE contas ADD COLUMN fatura_aberta_ano INTEGER');
+    }
   }
 
   static Future<void> _createTables(Database db) async {
@@ -138,7 +147,9 @@ class AppDB {
         cor TEXT NOT NULL DEFAULT 'FF3B82F6',
         icone TEXT,
         dia_vencimento INTEGER,
-        dia_fechamento INTEGER
+        dia_fechamento INTEGER,
+        fatura_aberta_mes INTEGER,
+        fatura_aberta_ano INTEGER
       )
     ''');
     await db.execute('''
@@ -148,6 +159,7 @@ class AppDB {
         limite REAL NOT NULL,
         mes INTEGER NOT NULL,
         ano INTEGER NOT NULL,
+        conta_id TEXT,
         rollover INTEGER NOT NULL DEFAULT 0
       )
     ''');
@@ -331,15 +343,32 @@ class AppDB {
   /// If the transaction date is on or after the closing day, it falls into
   /// the next month's invoice. Returns the adjusted DateTime.
   static DateTime _dataCreditoEfetiva(DateTime dataTransacao, Conta conta) {
-    final diaFechamento = conta.diaFechamento;
-    if (diaFechamento == null || diaFechamento <= 0) return dataTransacao;
+    final temFaturaConfigurada =
+        conta.faturaAbertaMes != null && conta.faturaAbertaAno != null;
+    if (!temFaturaConfigurada) {
+      final diaFechamento = conta.diaFechamento;
+      if (diaFechamento == null || diaFechamento <= 0) return dataTransacao;
 
-    if (dataTransacao.day >= diaFechamento) {
-      // Move to next month
-      return DateTime(
-          dataTransacao.year, dataTransacao.month + 1, dataTransacao.day);
+      if (dataTransacao.day >= diaFechamento) {
+        return DateTime(
+            dataTransacao.year, dataTransacao.month + 1, dataTransacao.day);
+      }
+      return dataTransacao;
     }
-    return dataTransacao;
+
+    final fechamento = conta.diaFechamento;
+    final referencia =
+        fechamento != null && fechamento > 0 && dataTransacao.day >= fechamento
+            ? dataTransacao.add(const Duration(days: 1))
+            : dataTransacao;
+    final mesAberto = resolverMesAbertoFatura(conta, referencia);
+    final lastDay = DateTime(mesAberto.year, mesAberto.month + 1, 0).day;
+    final dataEfetiva = DateTime(
+      mesAberto.year,
+      mesAberto.month,
+      dataTransacao.day.clamp(1, lastDay),
+    );
+    return dataEfetiva;
   }
 
   static Future<Transacao> _ajustarTransacaoCredito(
@@ -428,6 +457,39 @@ class AppDB {
   }
 
   static DateTime _mesAbertoCredito(Conta conta, DateTime referencia) {
+    return resolverMesAbertoFatura(conta, referencia);
+  }
+
+  static DateTime resolverMesAbertoFatura(Conta conta, DateTime referencia) {
+    if (conta.tipo != 'credito') {
+      return DateTime(referencia.year, referencia.month);
+    }
+
+    final mesConfigurado = conta.faturaAbertaMes;
+    final anoConfigurado = conta.faturaAbertaAno;
+    if (mesConfigurado != null &&
+        anoConfigurado != null &&
+        mesConfigurado >= 1 &&
+        mesConfigurado <= 12) {
+      var mesAberto = DateTime(anoConfigurado, mesConfigurado);
+      final fechamento = conta.diaFechamento;
+      if (fechamento == null || fechamento <= 0) return mesAberto;
+
+      final referenciaDia =
+          DateTime(referencia.year, referencia.month, referencia.day);
+      while (true) {
+        final lastDay = DateTime(mesAberto.year, mesAberto.month + 1, 0).day;
+        final fechamentoMes = DateTime(
+          mesAberto.year,
+          mesAberto.month,
+          fechamento.clamp(1, lastDay),
+        );
+        if (!referenciaDia.isAfter(fechamentoMes)) break;
+        mesAberto = DateTime(mesAberto.year, mesAberto.month + 1);
+      }
+      return mesAberto;
+    }
+
     final fechamento = conta.diaFechamento;
     if (fechamento != null && fechamento > 0 && referencia.day > fechamento) {
       return DateTime(referencia.year, referencia.month + 1);
@@ -749,7 +811,10 @@ class AppDB {
     // Busca o orçamento mais antigo da mesma categoria para saber o ponto de partida
     final todos = await getOrcamentos();
     final mesmaCat = todos
-        .where((o) => o.categoria == orcamento.categoria && o.rollover)
+        .where((o) =>
+            o.categoria == orcamento.categoria &&
+            o.contaId == orcamento.contaId &&
+            o.rollover)
         .toList()
       ..sort((a, b) {
         final dateA = DateTime(a.ano, a.mes);
@@ -779,6 +844,7 @@ class AppDB {
           limite: orcamento.limite,
           mes: cursor.month,
           ano: cursor.year,
+          contaId: orcamento.contaId,
           rollover: true,
         ),
       );
@@ -808,12 +874,13 @@ class AppDB {
     required String categoria,
     required DateTime inicio,
     required DateTime fim,
+    String? contaId,
   }) async {
     final database = await db;
     final txMaps = await database.query(
       'transacoes',
-      where: 'categoria = ?',
-      whereArgs: [categoria],
+      where: contaId == null ? 'categoria = ?' : 'categoria = ? AND banco = ?',
+      whereArgs: contaId == null ? [categoria] : [categoria, contaId],
     );
     final transacoes = txMaps.map((m) => Transacao.fromMap(m)).toList();
     if (transacoes.isEmpty) return {};
@@ -881,6 +948,7 @@ class AppDB {
           limite: orcamento.limite,
           mes: cursor.month,
           ano: cursor.year,
+          contaId: orcamento.contaId,
           rollover: true,
         ),
       );
@@ -926,6 +994,17 @@ class AppDB {
   /// Returns only the category names, sorted.
   static Future<List<String>> getNomesCategorias() async {
     final rows = await getCategorias();
+    return rows.map((r) => r['nome'] as String).toList();
+  }
+
+  /// Returns category names available for budgets, sorted.
+  static Future<List<String>> getNomesCategoriasParaOrcamento() async {
+    final rows = await (await db).query(
+      'categorias',
+      columns: ['nome'],
+      where: "tipo IN ('despesa', 'ambos')",
+      orderBy: 'ordem ASC, nome ASC',
+    );
     return rows.map((r) => r['nome'] as String).toList();
   }
 

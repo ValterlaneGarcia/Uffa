@@ -1,4 +1,6 @@
 class Conta {
+  static const Object _unset = Object();
+
   final String id;
   String nome;
   double limite;
@@ -9,6 +11,8 @@ class Conta {
   String? icone;
   int? diaVencimento;
   int? diaFechamento;
+  int? faturaAbertaMes;
+  int? faturaAbertaAno;
 
   Conta({
     required this.id,
@@ -21,6 +25,8 @@ class Conta {
     this.icone,
     this.diaVencimento,
     this.diaFechamento,
+    this.faturaAbertaMes,
+    this.faturaAbertaAno,
   });
 
   double get disponivel => tipo == 'credito' ? limite - saldo : saldo;
@@ -37,6 +43,8 @@ class Conta {
         'icone': icone,
         'dia_vencimento': diaVencimento,
         'dia_fechamento': diaFechamento,
+        'fatura_aberta_mes': faturaAbertaMes,
+        'fatura_aberta_ano': faturaAbertaAno,
       };
 
   factory Conta.fromMap(Map<String, dynamic> m) => Conta(
@@ -50,6 +58,8 @@ class Conta {
         icone: m['icone'],
         diaVencimento: m['dia_vencimento'] as int?,
         diaFechamento: m['dia_fechamento'] as int?,
+        faturaAbertaMes: m['fatura_aberta_mes'] as int?,
+        faturaAbertaAno: m['fatura_aberta_ano'] as int?,
       );
 
   Conta copyWith({
@@ -62,6 +72,8 @@ class Conta {
     String? icone,
     int? diaVencimento,
     int? diaFechamento,
+    Object? faturaAbertaMes = _unset,
+    Object? faturaAbertaAno = _unset,
   }) =>
       Conta(
         id: id,
@@ -74,6 +86,12 @@ class Conta {
         icone: icone ?? this.icone,
         diaVencimento: diaVencimento ?? this.diaVencimento,
         diaFechamento: diaFechamento ?? this.diaFechamento,
+        faturaAbertaMes: identical(faturaAbertaMes, _unset)
+            ? this.faturaAbertaMes
+            : faturaAbertaMes as int?,
+        faturaAbertaAno: identical(faturaAbertaAno, _unset)
+            ? this.faturaAbertaAno
+            : faturaAbertaAno as int?,
       );
 }
 
